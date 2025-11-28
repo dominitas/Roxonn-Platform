@@ -871,8 +871,14 @@ export async function registerRoutes(app: Express) {
   app.get("/api/public/unified-repo/:owner/:repo", async (req: Request, res: Response) => {
     const { owner, repo } = req.params;
     
-    if (!owner || !repo) {
-      return res.status(400).json({ error: 'Owner and repo parameters are required' });
+    // Validate owner and repo so they only contain safe GitHub-acceptable characters
+    // GitHub username/org: alphanumeric (a-z, 0-9), hyphens (-), max 39 chars
+    // Repo name: most allow dot (.), underscore (_), hyphens (-), no slashes, max 100 chars
+    const validOwner = /^[a-zA-Z0-9-]{1,39}$/.test(owner);
+    const validRepo = /^[\w\-.]{1,100}$/.test(repo);
+    
+    if (!owner || !repo || !validOwner || !validRepo) {
+      return res.status(400).json({ error: 'Invalid owner or repo name.' });
     }
     
     const fullRepoName = `${owner}/${repo}`;
