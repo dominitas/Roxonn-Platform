@@ -30,7 +30,6 @@ const sessionPool = new Pool({
 
 const PostgresSessionStore = connectPg(session);
 
-let lastDeserializeLog = 0;
 const LOG_INTERVAL = 5000; // 5 seconds
 
 export interface IStorage {
@@ -82,7 +81,7 @@ export class DatabaseStorage implements IStorage {
       });
       return user;
     } catch (error) {
-      console.error("Error getting user by ID:", error);
+      console.error(`Error getting user by ID ${id}:`, error);
       throw error;
     }
   }
@@ -94,7 +93,7 @@ export class DatabaseStorage implements IStorage {
       });
       return user;
     } catch (error) {
-      console.error("Error getting user by username:", error);
+      console.error(`Error getting user by username ${JSON.stringify(username)}:`, error);
       throw error;
     }
   }
@@ -106,7 +105,7 @@ export class DatabaseStorage implements IStorage {
       });
       return user;
     } catch (error) {
-      console.error("Error getting user by GitHub ID:", error);
+      console.error(`Error getting user by GitHub ID ${JSON.stringify(githubId)}:`, error);
       throw error;
     }
   }
