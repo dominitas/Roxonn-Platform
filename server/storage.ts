@@ -57,6 +57,7 @@ export interface IStorage {
   adjustUserPromptBalance(drizzleTx: any, userId: number, promptsToChange: number, type: string, notes?: string, onrampOrderId?: string): Promise<{ success: boolean; newBalance?: number; error?: string }>;
   getUserPromptBalance(userId: number): Promise<number>;
   updateRepositoryVisibility(githubRepoId: string, isPrivate: boolean): Promise<boolean>;
+  updateRepositoryActiveStatus(githubRepoId: string, isActive: boolean): Promise<boolean>;
 }
 
 // Define PromptTransactionType enum locally if not imported from a shared types file
@@ -385,6 +386,7 @@ export class DatabaseStorage implements IStorage {
             githubRepoId: true,
             githubRepoFullName: true,
             registeredAt: true,
+            isActive: true,
             // Explicitly exclude userId if not needed for public view
         }
       });
@@ -454,6 +456,27 @@ export class DatabaseStorage implements IStorage {
   }
 
   /**
+   * Update repository active status
+   * Used by pool managers to mark repos they're actively working on
+   */
+  async updateRepositoryActiveStatus(githubRepoId: string, isActive: boolean): Promise<boolean> {
+    try {
+      log(`Updating active status for repo ${githubRepoId} to isActive=${isActive}`, 'storage');
+      const result = await db.update(registeredRepositories)
+        .set({ isActive })
+        .where(eq(registeredRepositories.githubRepoId, githubRepoId))
+        .returning({ id: registeredRepositories.id });
+
+      const updated = result.length > 0;
+      log(`Repository active status update result: ${updated ? 'Updated' : 'Not found'}`, 'storage');
+      return updated;
+    } catch (error) {
+      log(`Error updating repository active status: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      throw error;
+    }
+  }
+
+  /**
    * Get a repository by ID for public access
    * This is used for public API endpoints that don't require authentication
    */
@@ -473,7 +496,8 @@ export class DatabaseStorage implements IStorage {
           githubRepoId: true,
           githubRepoFullName: true,
           registeredAt: true,
-          installationId: true
+          installationId: true,
+          isActive: true
         }
       });
       log(`Public repository fetch result: ${registration ? 'Found' : 'Not Found'}`, 'storage');

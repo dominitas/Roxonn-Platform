@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { GitFork, Link as LinkIcon, Loader2, Search, PlusCircle, Check, AlertCircle, CheckCircle2, Github, ListChecks, Lock } from 'lucide-react';
+import { GitFork, Link as LinkIcon, Loader2, Search, PlusCircle, Check, AlertCircle, CheckCircle2, Github, ListChecks, Lock, Activity } from 'lucide-react';
 import { STAGING_API_URL } from '../config';
 import { Link, useLocation } from 'wouter';
 import { useToast } from '@/hooks/use-toast';
@@ -17,9 +17,10 @@ import { OrgReposSection } from './org-repos-section';
 interface RegisteredRepository {
   id: number;
   userId: number;
-  githubRepoId: string; 
+  githubRepoId: string;
   githubRepoFullName: string;
   installationId: string | null;
+  isActive: boolean;
   registeredAt: string;
 }
 
@@ -109,9 +110,9 @@ export function MyRepositories() {
 
   const registeredRepoIds = new Set(registeredReposData?.map((r: RegisteredRepository) => String(r.githubRepoId)) || []);
 
-  // Create lookup map for registered status including installation ID
-  const registeredRepoMap = new Map(registeredReposData?.map((r: RegisteredRepository) => 
-      [String(r.githubRepoId), { registered: true, installed: !!r.installationId }]
+  // Create lookup map for registered status including installation ID and active status
+  const registeredRepoMap = new Map(registeredReposData?.map((r: RegisteredRepository) =>
+      [String(r.githubRepoId), { registered: true, installed: !!r.installationId, isActive: r.isActive || false }]
   ) || []);
 
   // Track GitHub app installation status client-side
@@ -372,6 +373,43 @@ export function MyRepositories() {
     }
   });
 
+  // Toggle repository active status mutation
+  const toggleActiveMutation = useMutation({
+    mutationFn: async ({ repoId, isActive }: { repoId: string; isActive: boolean }) => {
+      const csrfToken = await csrfService.getToken();
+      const response = await fetch(`${STAGING_API_URL}/api/repositories/${repoId}/active`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken
+        },
+        body: JSON.stringify({ isActive, _csrf: csrfToken })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData?.error || 'Failed to update active status');
+      }
+      return response.json();
+    },
+    onSuccess: (data, variables) => {
+      toast({
+        title: 'Success',
+        description: `Repository marked as ${variables.isActive ? 'active' : 'inactive'}`
+      });
+      queryClient.invalidateQueries({ queryKey: ['registeredRepositories', user?.id] });
+      queryClient.invalidateQueries({ queryKey: ['publicRepositories'] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to update active status',
+        variant: 'destructive'
+      });
+    }
+  });
+
   // Handle repository registration (no need to check app installation - server handles it)
   const handleRepoRegistration = (repo: Repository) => {
     // Check if we have a stored installation ID from previous installation
@@ -396,13 +434,13 @@ export function MyRepositories() {
 
   // Get registration status for a repository
   const getRegistrationStatus = (repo: Repository) => {
-    const status = registeredRepoMap.get(String(repo.id)) || { registered: false, installed: false };
-    
+    const status = registeredRepoMap.get(String(repo.id)) || { registered: false, installed: false, isActive: false };
+
     // If we have it in our local cache, consider it registered too
     if (localRegisteredRepos.has(String(repo.id))) {
       status.registered = true;
     }
-    
+
     return status;
   };
 
@@ -620,16 +658,38 @@ export function MyRepositories() {
                       </a>
                     </Button>
                     
-                    {/* Fund/Manage button - show if repo is registered */}
+                    {/* Active toggle and Fund/Manage button - show if repo is registered */}
                     {registrationStatus.registered && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigateToRepo(repo.full_name)}
-                        className="ml-2"
-                      >
-                        Fund / Manage
-                      </Button>
+                      <>
+                        <Button
+                          variant={registrationStatus.isActive ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => toggleActiveMutation.mutate({
+                            repoId: String(repo.id),
+                            isActive: !registrationStatus.isActive
+                          })}
+                          disabled={toggleActiveMutation.isPending}
+                          className={`ml-2 ${registrationStatus.isActive ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`}
+                          title={registrationStatus.isActive ? 'Click to mark as inactive' : 'Click to mark as active'}
+                        >
+                          {toggleActiveMutation.isPending ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <>
+                              <Activity className="h-4 w-4 mr-1" />
+                              {registrationStatus.isActive ? 'Active' : 'Set Active'}
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigateToRepo(repo.full_name)}
+                          className="ml-2"
+                        >
+                          Fund / Manage
+                        </Button>
+                      </>
                     )}
                   </div>
                 </div>

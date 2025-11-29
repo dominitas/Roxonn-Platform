@@ -53,6 +53,7 @@ export const registeredRepositories = pgTable("registered_repositories", {
   githubRepoFullName: text("github_repo_full_name").notNull(),
   installationId: text("installation_id"), // Store the GitHub App Installation ID (nullable)
   isPrivate: boolean("is_private").default(false), // Track if repository is private
+  isActive: boolean("is_active").default(false), // Track if repository is actively maintained
   registeredAt: timestamp("registered_at").defaultNow(),
 });
 

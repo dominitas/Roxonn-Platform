@@ -653,6 +653,47 @@ export async function registerRoutes(app: Express) {
     }
   });
 
+  // Toggle repository active status (pool manager only)
+  app.patch("/api/repositories/:repoId/active",
+    requireAuth,
+    securityMiddlewares.repoRateLimiter,
+    securityMiddlewares.securityMonitor,
+    async (req: Request, res: Response) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    const { repoId } = req.params;
+    const { isActive } = req.body;
+
+    if (typeof isActive !== 'boolean') {
+      return res.status(400).json({ error: 'isActive must be a boolean' });
+    }
+
+    try {
+      // Verify user owns this repository
+      const repo = await storage.findRegisteredRepositoryByGithubId(repoId);
+      if (!repo) {
+        return res.status(404).json({ error: 'Repository not found' });
+      }
+
+      if (repo.userId !== req.user.id) {
+        return res.status(403).json({ error: 'Not authorized to modify this repository' });
+      }
+
+      const updated = await storage.updateRepositoryActiveStatus(repoId, isActive);
+      if (updated) {
+        log(`Repository ${repoId} active status set to ${isActive} by user ${req.user.id}`, 'routes');
+        res.json({ success: true, isActive });
+      } else {
+        res.status(500).json({ error: 'Failed to update repository' });
+      }
+    } catch (error) {
+      log(`Error updating repository active status: ${error}`, 'routes');
+      res.status(500).json({ error: 'Failed to update repository active status' });
+    }
+  });
+
   // Get repositories accessible to the current user (public + private repos they have GitHub access to)
   // Uses GitHub App installation tokens to check collaborator status - NO user private tokens needed
   app.get("/api/repositories/accessible",

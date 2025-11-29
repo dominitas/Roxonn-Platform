@@ -26,6 +26,7 @@ import {
   Sparkles,
   ChevronRight,
   X,
+  Activity,
 } from "lucide-react";
 
 interface Repository {
@@ -34,6 +35,7 @@ interface Repository {
   githubRepoFullName: string;
   registeredAt: string;
   isPrivate?: boolean;
+  isActive?: boolean;
   xdcPoolRewards?: string;
   roxnPoolRewards?: string;
 }
@@ -68,7 +70,7 @@ function RepoCard({ repo, index }: { repo: Repository; index: number }) {
               </div>
 
               {/* Status Badges */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 {repo.isPrivate ? (
                   <Badge variant="outline" className="bg-violet-500/10 text-violet-500 border-violet-500/30 text-xs">
                     <Lock className="w-3 h-3 mr-1" />
@@ -84,6 +86,12 @@ function RepoCard({ repo, index }: { repo: Repository; index: number }) {
                   <Badge variant="outline" className="bg-amber-500/10 text-amber-500 border-amber-500/30 text-xs">
                     <Coins className="w-3 h-3 mr-1" />
                     Funded
+                  </Badge>
+                )}
+                {repo.isActive && (
+                  <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/30 text-xs animate-pulse">
+                    <Activity className="w-3 h-3 mr-1" />
+                    Active
                   </Badge>
                 )}
               </div>
