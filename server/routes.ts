@@ -41,6 +41,7 @@ import aiScopingAgentRouter from './routes/aiScopingAgent';
 import multiCurrencyWalletRoutes from './routes/multiCurrencyWallet';
 import referralRoutes from './routes/referralRoutes';
 import { referralService } from './services/referralService';
+import { activityService } from './services/activityService';
 import { dispatchTask } from './services/proofOfComputeService';
 import { handleHeartbeat, getNodeStatus, getAllNodeStatuses } from './services/exoNodeService';
 import { securityMiddlewares } from './security/middlewares';
@@ -3506,6 +3507,27 @@ export async function registerRoutes(app: Express) {
 
   // Referral system routes
   app.use('/api/referral', referralRoutes);
+
+  // User Activity API - aggregates activity from multiple sources
+  app.get('/api/user/activity', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = req.user;
+      if (!user) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+
+      const limit = parseInt(req.query.limit as string) || 10;
+      const cappedLimit = Math.min(Math.max(limit, 1), 50);
+
+      const activities = await activityService.getRecentActivity(user.id, cappedLimit);
+
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      res.json({ activities });
+    } catch (error: any) {
+      log(`Error fetching user activity: ${error.message}`, 'activity-ERROR');
+      res.status(500).json({ error: 'Failed to fetch user activity' });
+    }
+  });
 
   // --- Proof of Compute V1 Routes ---
   app.post('/api/node/dispatch-task', requireAuth, async (req, res) => {
