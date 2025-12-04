@@ -1161,6 +1161,15 @@ export function parseBountyCommand(comment: string): BountyCommand | null {
     return null;
   }
 
+  // Remove code blocks (``` ... ```) to avoid parsing commands in examples/documentation
+  let cleanedComment = comment.replace(/```[\s\S]*?```/g, '');
+
+  // Remove inline code (` ... `) to avoid parsing commands in inline examples
+  cleanedComment = cleanedComment.replace(/`[^`]+`/g, '');
+
+  // Remove quoted text (> ...) as these are usually references/quotes
+  cleanedComment = cleanedComment.replace(/^>\s*.*/gm, '');
+
   const patterns = [
     /\/bounty\s+(\d+(?:\.\d+)?)\s*(XDC|ROXN|USDC)/i,
     /\/bounty\s*$/i,
@@ -1169,7 +1178,7 @@ export function parseBountyCommand(comment: string): BountyCommand | null {
   ];
 
   for (const pattern of patterns) {
-    const match = comment.match(pattern);
+    const match = cleanedComment.match(pattern);
     if (match) {
       const amount = match[1];
       const currency = match[2]?.toUpperCase() as 'XDC' | 'ROXN' | 'USDC' | undefined;
@@ -1304,7 +1313,9 @@ Please wait at least 1 minute between bounty commands on the same issue.
   // Handle allocation (pool manager only)
   if (command.type === 'allocate' && command.amount && command.currency) {
     // Check if commenter is pool manager
-    const poolManager = await storage.getRepositoryPoolManager(registration.id);
+    // Use GitHub repo ID for blockchain calls (not internal DB id)
+    const blockchainRepoId = parseInt(registration.githubRepoId);
+    const poolManager = await storage.getRepositoryPoolManager(blockchainRepoId);
     if (!poolManager || poolManager.githubUsername !== commenter) {
       const errorMsg = `❌ **Not Authorized**
 
@@ -1318,7 +1329,7 @@ Only pool managers can allocate bounties. You can request a bounty by commenting
 
     // Check pool balance
     try {
-      const repoDetails = await blockchain.getRepository(registration.id);
+      const repoDetails = await blockchain.getRepository(blockchainRepoId);
       const poolBalanceStr = command.currency === 'XDC' 
         ? repoDetails.xdcPoolRewards 
         : command.currency === 'ROXN'
@@ -1344,7 +1355,7 @@ Please add funds to the pool first.
 
       // Allocate bounty on blockchain
       const result = await blockchain.allocateIssueReward(
-        registration.id,
+        blockchainRepoId,
         issueNumber,
         command.amount,
         command.currency,

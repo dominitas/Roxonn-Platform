@@ -19,7 +19,7 @@ import passport from "passport";
 import { registerRoutes } from "./routes";
 import { setupVite } from "./vite";
 import { serveStatic, log } from "./utils";
-import swaggerUi from 'swagger-ui-express';
+// swagger-ui-express not used - serving custom HTML with CDN assets instead
 import { swaggerSpec } from './swagger';
 import { setupAuth, requireAuth } from './auth';
 import { generateWallet } from './tatum';
@@ -47,9 +47,9 @@ app.use(helmet({
       ...helmet.contentSecurityPolicy.getDefaultDirectives(),
       "connect-src": ["'self'", "https://api.roxonn.com", "https://salesiq.zohopublic.in", "https://rpc.ankr.com"], // Allow self, API, Zoho, and Ankr XDC RPC
       // Allow GTM, inline scripts, Zoho scripts, and Onramp SDK
-      "script-src": ["'self'", "'unsafe-inline'", "https://www.googletagmanager.com", "https://salesiq.zohopublic.in", "https://js.zohocdn.com", "https://static.zohocdn.com", "https://cdn.skypack.dev"],
+      "script-src": ["'self'", "'unsafe-inline'", "https://www.googletagmanager.com", "https://salesiq.zohopublic.in", "https://js.zohocdn.com", "https://static.zohocdn.com", "https://cdn.skypack.dev", "https://unpkg.com"],
       // Allow inline styles, Google Fonts, Zoho styles, and Video.js CDN
-      "style-src": ["'self'", "https://fonts.googleapis.com", "'unsafe-inline'", "https://css.zohocdn.com", "https://static.zohocdn.com", "https://vjs.zencdn.net", "https://api.fontshare.com"],
+      "style-src": ["'self'", "https://fonts.googleapis.com", "'unsafe-inline'", "https://css.zohocdn.com", "https://static.zohocdn.com", "https://vjs.zencdn.net", "https://api.fontshare.com", "https://unpkg.com"],
       "font-src": ["'self'", "https://fonts.gstatic.com", "https://css.zohocdn.com", "https://static.zohocdn.com", "https://vjs.zencdn.net"], // Allow Google Fonts, Zoho fonts, and Video.js fonts
       // Allow images from self, data URLs, and GitHub avatars
       "img-src": ["'self'", "data:", "https://avatars.githubusercontent.com", "https://images.pexels.com", "https://api.dicebear.com", "https://static.zohocdn.com", "https://css.zohocdn.com", "https://images.unsplash.com"],
@@ -427,8 +427,7 @@ app.get('/health', (req, res) => {
 // Register API routes
 // registerRoutes(app);  // Will be called after config initialization
 
-// Swagger UI
-app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+// Swagger UI is set up inside startServer() to ensure proper route order
 
 // Configure Vite middleware for development if not in production
 // ... existing code ...
@@ -465,6 +464,36 @@ async function startServer() {
 
     // Register API routes
     registerRoutes(app);
+
+    // Swagger UI - custom endpoints to avoid esbuild bundling issues with swagger-ui-express
+    // Serve swagger spec as JSON
+    app.get('/api/docs/swagger.json', (req, res) => {
+      res.json(swaggerSpec);
+    });
+
+    // Serve custom HTML that loads swagger-ui from CDN
+    app.get('/api/docs', (req, res) => {
+      res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Roxonn API Docs</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui.css" />
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui-standalone-preset.js"></script>
+  <script>
+    SwaggerUIBundle({
+      url: '/api/docs/swagger.json',
+      dom_id: '#swagger-ui',
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+      layout: 'StandaloneLayout'
+    });
+  </script>
+</body>
+</html>`);
+    });
 
     // Configure Vite or static file serving
     if (config.nodeEnv !== 'production') {
