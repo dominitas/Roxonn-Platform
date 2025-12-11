@@ -46,13 +46,13 @@ export async function getTopProjects(limit: number = 50): Promise<Project[]> {
     const projectRankings = await db.select({
         id: registeredRepositories.id,
         githubRepoFullName: registeredRepositories.githubRepoFullName,
-        totalBounties: sql<number>`count(${multiCurrencyBounties.id})`.as('totalBounties'),
+        totalBounties: sql<number>`count(${multiCurrencyBounties.id})`.as('total_bounties'),
     })
         .from(registeredRepositories)
         .leftJoin(multiCurrencyBounties, eq(registeredRepositories.githubRepoId, multiCurrencyBounties.repoId))
         .where(eq(registeredRepositories.isActive, true))
         .groupBy(registeredRepositories.id, registeredRepositories.githubRepoFullName)
-        .orderBy(desc(sql`totalBounties`))
+        .orderBy(desc(sql`total_bounties`))
         .limit(limit);
 
     return projectRankings.map((p, index) => {
