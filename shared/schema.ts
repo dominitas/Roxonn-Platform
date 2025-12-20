@@ -587,6 +587,7 @@ export const createPromotionalSubmissionSchema = z.object({
   bountyId: z.number().int().positive(),
   proofLinks: z.array(
     z.string()
+      .trim()
       .url("Must be a valid URL")
       .refine(
         (url) => /^https?:\/\//i.test(url),
