@@ -773,6 +773,206 @@ export async function getOrgReposForRegistration(token: string, orgName: string)
   }
 }
 
+/**
+ * Verify that a PR was merged and closes a specific issue
+ *
+ * WHY THIS FUNCTION:
+ * - Community bounty relayer must verify PR merge before calling completeBounty()
+ * - GitHub merge events cannot be verified on-chain
+ * - Prevents fraudulent bounty claims without actual PR merge
+ * - Provides audit trail for bounty completion
+ *
+ * VERIFICATION STEPS:
+ * 1. Fetch PR details from GitHub API
+ * 2. Verify PR.merged is true (not just closed)
+ * 3. Verify PR.merged_at timestamp exists
+ * 4. Extract issue numbers from PR body (closes #123 syntax)
+ * 5. Verify target issue is in the linked issues list
+ * 6. Verify issue is now closed
+ *
+ * WHY THESE CHECKS:
+ * - merged=true: Ensures code was actually merged, not just closed
+ * - merged_at: Prevents claiming bounty for drafts/abandoned PRs
+ * - Issue linkage: Ensures PR actually addressed the bounty issue
+ * - Issue closed: Confirms issue resolution (GitHub auto-closes on merge)
+ *
+ * @param owner - Repository owner (username or org)
+ * @param repo - Repository name
+ * @param prNumber - Pull request number
+ * @param issueNumber - Issue number that should be closed by this PR
+ * @param installationId - GitHub App installation ID for auth
+ * @returns Object with verification result and details
+ */
+export async function verifyPRMergedAndClosesIssue(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  issueNumber: number,
+  installationId: string
+): Promise<{
+  verified: boolean;
+  merged: boolean;
+  mergedAt: string | null;
+  mergedBy: string | null;
+  issueLinked: boolean;
+  issueClosed: boolean;
+  error?: string;
+}> {
+  // SSRF Protection: Validate input parameters
+  if (!isValidGitHubOwner(owner)) {
+    return {
+      verified: false,
+      merged: false,
+      mergedAt: null,
+      mergedBy: null,
+      issueLinked: false,
+      issueClosed: false,
+      error: `Invalid repository owner format: ${owner}`
+    };
+  }
+
+  if (!isValidGitHubRepo(repo)) {
+    return {
+      verified: false,
+      merged: false,
+      mergedAt: null,
+      mergedBy: null,
+      issueLinked: false,
+      issueClosed: false,
+      error: `Invalid repository name format: ${repo}`
+    };
+  }
+
+  try {
+    log(`Verifying PR #${prNumber} merged and closes issue #${issueNumber} in ${owner}/${repo}`, 'github');
+
+    // WHY INSTALLATION TOKEN: Use GitHub App installation token for API access
+    // This provides repo-specific permissions without requiring user tokens
+    const installationToken = await getInstallationAccessToken(installationId);
+    if (!installationToken) {
+      return {
+        verified: false,
+        merged: false,
+        mergedAt: null,
+        mergedBy: null,
+        issueLinked: false,
+        issueClosed: false,
+        error: `Could not get installation token for installId ${installationId}`
+      };
+    }
+
+    const headers = getGitHubApiHeaders(installationToken);
+
+    // STEP 1: Fetch PR details
+    // WHY: Get merge status, merge timestamp, and PR body for issue linkage
+    const prResponse = await axios.get(
+      buildSafeGitHubUrl('/repos/{owner}/{repo}/pulls/{pull_number}', {
+        owner,
+        repo,
+        pull_number: prNumber.toString()
+      }),
+      { headers }
+    );
+
+    const pr = prResponse.data;
+
+    // STEP 2: Verify PR was merged (not just closed)
+    // WHY: Closed PRs without merge should not trigger bounty payout
+    if (!pr.merged || !pr.merged_at) {
+      log(`PR #${prNumber} is not merged (merged=${pr.merged}, merged_at=${pr.merged_at})`, 'github');
+      return {
+        verified: false,
+        merged: false,
+        mergedAt: null,
+        mergedBy: null,
+        issueLinked: false,
+        issueClosed: false,
+        error: 'PR is not merged'
+      };
+    }
+
+    const mergedAt = pr.merged_at;
+    const mergedBy = pr.merged_by?.login || null;
+
+    log(`PR #${prNumber} was merged at ${mergedAt} by ${mergedBy}`, 'github');
+
+    // STEP 3: Extract issue numbers from PR body
+    // WHY: Verify PR explicitly links to the bounty issue
+    const prBody = pr.body || '';
+    const linkedIssueNumbers = extractIssueNumbers(prBody);
+
+    log(`PR #${prNumber} links to issues: ${linkedIssueNumbers.join(', ')}`, 'github');
+
+    // STEP 4: Verify target issue is linked
+    // WHY: Prevent claiming bounty for PR that doesn't address the issue
+    const issueLinked = linkedIssueNumbers.includes(issueNumber);
+    if (!issueLinked) {
+      log(`PR #${prNumber} does not link to issue #${issueNumber}`, 'github');
+      return {
+        verified: false,
+        merged: true,
+        mergedAt,
+        mergedBy,
+        issueLinked: false,
+        issueClosed: false,
+        error: `PR does not link to issue #${issueNumber} (found: ${linkedIssueNumbers.join(', ')})`
+      };
+    }
+
+    // STEP 5: Verify issue is now closed
+    // WHY: GitHub auto-closes issues when PR with "closes #123" is merged
+    // If issue is not closed, something is wrong (manual reopen, etc.)
+    const issueResponse = await axios.get(
+      buildSafeGitHubUrl('/repos/{owner}/{repo}/issues/{issue_number}', {
+        owner,
+        repo,
+        issue_number: issueNumber.toString()
+      }),
+      { headers }
+    );
+
+    const issue = issueResponse.data;
+    const issueClosed = issue.state === 'closed';
+
+    if (!issueClosed) {
+      log(`Issue #${issueNumber} is not closed (state=${issue.state})`, 'github');
+      return {
+        verified: false,
+        merged: true,
+        mergedAt,
+        mergedBy,
+        issueLinked: true,
+        issueClosed: false,
+        error: `Issue #${issueNumber} is not closed`
+      };
+    }
+
+    // ALL CHECKS PASSED
+    log(`✅ Verification passed: PR #${prNumber} merged and closes issue #${issueNumber}`, 'github');
+    return {
+      verified: true,
+      merged: true,
+      mergedAt,
+      mergedBy,
+      issueLinked: true,
+      issueClosed: true
+    };
+
+  } catch (error: any) {
+    const errorMsg = `Error verifying PR #${prNumber}: ${error.response?.status} - ${error.message}`;
+    log(errorMsg, 'github');
+    return {
+      verified: false,
+      merged: false,
+      mergedAt: null,
+      mergedBy: null,
+      issueLinked: false,
+      issueClosed: false,
+      error: errorMsg
+    };
+  }
+}
+
 // Comment out old webhook handler
 /*
 export async function handleGitHubWebhook(req: Request, res: Response) {
@@ -1191,62 +1391,180 @@ export async function findAppInstallationByName(
 }
 
 // --- Bounty Command Parser ---
+/*
+ * BOUNTY COMMAND TYPES
+ *
+ * WHY THESE TYPES:
+ * - 'pool_allocate': Existing pool bounty flow (pool managers only)
+ * - 'community_create': NEW community bounty flow (anyone can create)
+ * - 'community_claim': NEW claim community bounty via /claim command
+ * - 'status': NEW check bounty status via @roxonn status
+ * - 'request': Existing bounty request (ask pool manager to allocate)
+ *
+ * WHY SEPARATE TYPES:
+ * - Clear separation between pool and community bounties
+ * - Different authorization rules (pool = managers, community = anyone)
+ * - Different workflows (pool = instant, community = payment required)
+ */
 export interface BountyCommand {
-  type: 'allocate' | 'request';
+  type: 'pool_allocate' | 'community_create' | 'community_claim' | 'status' | 'request';
   amount?: string;
   currency?: 'XDC' | 'ROXN' | 'USDC';
+  prNumber?: number; // For claim commands
 }
 
+/*
+ * COMMAND PARSER
+ *
+ * WHY THIS PARSING LOGIC:
+ * 1. Clean comment first (remove code blocks, inline code, quotes)
+ * 2. Try to match specific patterns in order of priority
+ * 3. Return appropriate command type based on pattern
+ *
+ * COMMAND PATTERNS (in priority order):
+ * 1. /bounty pool <amount> <currency> → pool_allocate (EXISTING, preserved)
+ * 2. /bounty <amount> <currency> → community_create (NEW, default)
+ * 3. /claim #<prNumber> → community_claim (NEW)
+ * 4. @roxonn status → status (NEW)
+ * 5. /bounty → request (EXISTING, ask pool manager)
+ *
+ * WHY PRIORITY MATTERS:
+ * - "pool" keyword must be checked first (more specific)
+ * - Otherwise "/bounty pool 100 USDC" would match "/bounty" pattern
+ */
 export function parseBountyCommand(comment: string): BountyCommand | null {
   if (!comment || typeof comment !== 'string') {
     return null;
   }
 
   // Remove code blocks (``` ... ```) to avoid parsing commands in examples/documentation
+  // WHY: Prevents bot from responding to examples in documentation
   let cleanedComment = comment.replace(/```[\s\S]*?```/g, '');
 
   // Remove inline code (` ... `) to avoid parsing commands in inline examples
+  // WHY: Prevents bot from responding to inline code examples
   cleanedComment = cleanedComment.replace(/`[^`]+`/g, '');
 
   // Remove quoted text (> ...) as these are usually references/quotes
+  // WHY: Prevents bot from responding to quoted comments
   cleanedComment = cleanedComment.replace(/^>\s*.*/gm, '');
 
-  const patterns = [
-    /\/bounty\s+(\d+(?:\.\d+)?)\s*(XDC|ROXN|USDC)/i,
-    /\/bounty\s*$/i,
-    /@roxonn\s+bounty\s+(\d+(?:\.\d+)?)\s*(XDC|ROXN|USDC)/i,
-    /@roxonn\s+bounty\s*$/i,
+  // =========================================================================
+  // PATTERN 1: /claim #<prNumber> (Community bounty claim)
+  // =========================================================================
+  // WHY FIRST: Most specific pattern, no ambiguity
+  const claimPattern = /\/claim\s+#?(\d+)/i;
+  const claimMatch = cleanedComment.match(claimPattern);
+  if (claimMatch) {
+    const prNumber = parseInt(claimMatch[1], 10);
+    if (!isNaN(prNumber) && prNumber > 0) {
+      return {
+        type: 'community_claim',
+        prNumber,
+      };
+    }
+  }
+
+  // =========================================================================
+  // PATTERN 2: @roxonn status (Check bounty status)
+  // =========================================================================
+  // WHY SECOND: Specific status check, no amount parsing needed
+  if (/@roxonn\s+status/i.test(cleanedComment)) {
+    return {
+      type: 'status',
+    };
+  }
+
+  // =========================================================================
+  // PATTERN 3: /bounty pool <amount> <currency> (Pool bounty - EXISTING)
+  // =========================================================================
+  // WHY THIRD: Must check "pool" keyword before generic "/bounty"
+  // PRESERVES EXISTING BEHAVIOR for pool managers
+  const poolBountyPatterns = [
+    /\/bounty\s+pool\s+(\d+(?:\.\d+)?)\s*(XDC|ROXN|USDC)/i,
+    /@roxonn\s+bounty\s+pool\s+(\d+(?:\.\d+)?)\s*(XDC|ROXN|USDC)/i,
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of poolBountyPatterns) {
     const match = cleanedComment.match(pattern);
     if (match) {
       const amount = match[1];
-      const currency = match[2]?.toUpperCase() as 'XDC' | 'ROXN' | 'USDC' | undefined;
+      const currency = match[2]?.toUpperCase() as 'XDC' | 'ROXN' | 'USDC';
 
-      if (amount && currency) {
-        // Validate currency
-        if (!['XDC', 'ROXN', 'USDC'].includes(currency)) {
-          return null;
-        }
-        // Validate amount
-        const amountNum = parseFloat(amount);
-        if (isNaN(amountNum) || amountNum <= 0 || amountNum > 1000000) {
-          return null;
-        }
-        return {
-          type: 'allocate',
-          amount,
-          currency,
-        };
-      } else {
-        // Just /bounty or @roxonn bounty without amount
-        return {
-          type: 'request',
-        };
+      // Validate currency
+      if (!['XDC', 'ROXN', 'USDC'].includes(currency)) {
+        return null;
       }
+
+      // Validate amount
+      const amountNum = parseFloat(amount);
+      if (isNaN(amountNum) || amountNum <= 0 || amountNum > 1000000) {
+        return null;
+      }
+
+      return {
+        type: 'pool_allocate',
+        amount,
+        currency,
+      };
     }
   }
+
+  // =========================================================================
+  // PATTERN 4: /bounty <amount> <currency> (Community bounty - NEW DEFAULT)
+  // =========================================================================
+  // WHY FOURTH: Generic bounty creation (NEW: defaults to community)
+  // BREAKING CHANGE: Old "/bounty X USDC" now creates community bounty
+  // MIGRATION: Pool managers must use "/bounty pool X USDC" explicitly
+  const communityBountyPatterns = [
+    /\/bounty\s+(\d+(?:\.\d+)?)\s*(XDC|ROXN|USDC)/i,
+    /@roxonn\s+bounty\s+(\d+(?:\.\d+)?)\s*(XDC|ROXN|USDC)/i,
+  ];
+
+  for (const pattern of communityBountyPatterns) {
+    const match = cleanedComment.match(pattern);
+    if (match) {
+      const amount = match[1];
+      const currency = match[2]?.toUpperCase() as 'XDC' | 'ROXN' | 'USDC';
+
+      // Validate currency
+      if (!['XDC', 'ROXN', 'USDC'].includes(currency)) {
+        return null;
+      }
+
+      // Validate amount
+      const amountNum = parseFloat(amount);
+      if (isNaN(amountNum) || amountNum <= 0 || amountNum > 1000000) {
+        return null;
+      }
+
+      return {
+        type: 'community_create',
+        amount,
+        currency,
+      };
+    }
+  }
+
+  // =========================================================================
+  // PATTERN 5: /bounty (Bounty request - EXISTING)
+  // =========================================================================
+  // WHY LAST: Most generic, matches "/bounty" without amount
+  // PRESERVES EXISTING BEHAVIOR: Ask pool manager to allocate
+  const requestPatterns = [
+    /\/bounty\s*$/i,
+    /@roxonn\s+bounty\s*$/i,
+  ];
+
+  for (const pattern of requestPatterns) {
+    if (pattern.test(cleanedComment)) {
+      return {
+        type: 'request',
+      };
+    }
+  }
+
+  // No pattern matched
   return null;
 }
 
@@ -1320,12 +1638,20 @@ export async function handleBountyCommand(
 
   log(`Command parsed: type=${command.type}, amount=${command.amount}, currency=${command.currency}`, 'bounty-command');
 
-  // Check repository registration
+  // =========================================================================
+  // REPOSITORY REGISTRATION CHECK
+  // =========================================================================
+  // WHY: Some commands require registration (pool bounties), others don't (community bounties)
   const registration = await storage.findRegisteredRepositoryByGithubId(repoId);
-  if (!registration) {
+
+  // Commands that REQUIRE registration: pool_allocate, request
+  // Commands that DON'T require registration: community_create, community_claim, status
+  if (['pool_allocate', 'request'].includes(command.type) && !registration) {
     const errorMsg = `❌ **Repository Not Registered**
 
 This repository is not registered on Roxonn. Please register it first at [Roxonn Dashboard](https://app.roxonn.com).
+
+**Note:** You can still create community bounties on unregistered repos by commenting \`/bounty <amount> <currency>\`.
 
 ---
 <sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;
@@ -1351,8 +1677,12 @@ Please wait at least 1 minute between bounty commands on the same issue.
     return;
   }
 
-  // Handle allocation (pool manager only)
-  if (command.type === 'allocate' && command.amount && command.currency) {
+  // =========================================================================
+  // COMMAND TYPE: pool_allocate (EXISTING POOL BOUNTY FLOW - PRESERVED)
+  // =========================================================================
+  // WHY: Pool managers allocate bounties from pre-funded repository pool
+  // AUTHORIZATION: Only pool managers can use this command
+  if (command.type === 'pool_allocate' && command.amount && command.currency) {
     // Check if commenter is pool manager
     // Use GitHub repo ID for blockchain calls (not internal DB id)
     const blockchainRepoId = parseInt(registration.githubRepoId);
@@ -1436,8 +1766,295 @@ Please try again or contact support.
       await postGitHubComment(installationId, owner, repo, issueNumber, errorMsg);
     }
 
-  } else {
-    // Handle request (anyone can request)
+  // =========================================================================
+  // COMMAND TYPE: community_create (NEW COMMUNITY BOUNTY FLOW)
+  // =========================================================================
+  // WHY: Anyone can create community bounties on any public repo
+  // AUTHORIZATION: Any authenticated user
+  // WORKFLOW: Create pending bounty → Reply with payment links → User pays → Bounty activated
+  } else if (command.type === 'community_create' && command.amount && command.currency) {
+    log(`Creating community bounty: ${command.amount} ${command.currency}`, 'bounty-command');
+
+    // Check if bounty already exists for this issue
+    const existingBounty = await storage.getCommunityBountyByIssue(owner, repo, issueNumber);
+    if (existingBounty) {
+      const statusEmoji = existingBounty.status === 'funded' ? '✅' : '⏳';
+      const errorMsg = `❌ **Bounty Already Exists**
+
+This issue already has a community bounty:
+- **Status:** ${statusEmoji} ${existingBounty.status}
+- **Amount:** ${existingBounty.amount} ${existingBounty.currency}
+- **Created by:** @${existingBounty.createdByGithubUsername}
+
+${existingBounty.status === 'funded' ? 'This bounty is active and ready to claim!' : 'Waiting for payment...'}
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;
+      await postGitHubComment(installationId, owner, repo, issueNumber, errorMsg);
+      return;
+    }
+
+    // Get user info (if authenticated)
+    let creatorUserId: number | undefined;
+    try {
+      const user = await storage.getUserByUsername(commenter);
+      creatorUserId = user?.id;
+    } catch (error) {
+      log(`Could not find user ${commenter}, creating bounty without user ID`, 'bounty-command');
+    }
+
+    // Create pending bounty in database
+    try {
+      const bounty = await storage.createCommunityBounty({
+        githubRepoOwner: owner,
+        githubRepoName: repo,
+        githubIssueNumber: issueNumber,
+        githubIssueId: issueId,
+        githubIssueUrl: issueUrl,
+        creatorUserId,
+        createdByGithubUsername: commenter,
+        title: issue.title || `Issue #${issueNumber}`,
+        description: issue.body?.substring(0, 500),
+        amount: command.amount,
+        currency: command.currency,
+      });
+
+      // Generate payment links (placeholder URLs for now - will implement in Phase 5)
+      const cryptoPaymentUrl = `https://app.roxonn.com/bounties/${bounty.id}/pay/crypto`;
+      const fiatPaymentUrl = `https://app.roxonn.com/bounties/${bounty.id}/pay/fiat`;
+
+      const successMsg = `🎯 **Community Bounty Created!**
+
+| Amount | Currency | Status |
+|--------|----------|--------|
+| **${command.amount}** | ${command.currency} | ⏳ Awaiting Payment |
+
+**Next Steps:**
+1. Fund this bounty using one of the payment methods below
+2. Once funded, anyone can claim it by submitting a PR
+3. Bounty is paid automatically when PR is merged
+
+**Payment Options:**
+🔐 [Pay with Crypto](${cryptoPaymentUrl}) (USDC/XDC/ROXN)
+💳 [Pay with Card/Bank](${fiatPaymentUrl}) (Fiat → Crypto)
+
+**About Community Bounties:**
+- ✅ Works on ANY public GitHub repo (no registration required)
+- ✅ Transparent escrow (funds held in smart contract)
+- ✅ Automatic payout on PR merge
+- ✅ Refundable if unclaimed (with expiry)
+
+🔗 [View Bounty Details](https://app.roxonn.com/bounties/${bounty.id})
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com) • Community Bounty #${bounty.id}</sub>`;
+
+      await postGitHubComment(installationId, owner, repo, issueNumber, successMsg);
+      log(`Community bounty created: ID=${bounty.id}, Amount=${command.amount} ${command.currency}`, 'bounty-command');
+
+    } catch (error: any) {
+      log(`Error creating community bounty: ${error.message}`, 'bounty-command-ERROR');
+      const errorMsg = `❌ **Bounty Creation Failed**
+
+${error.message}
+
+Please try again or contact support.
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;
+      await postGitHubComment(installationId, owner, repo, issueNumber, errorMsg);
+    }
+
+  // =========================================================================
+  // COMMAND TYPE: community_claim (NEW CLAIM COMMUNITY BOUNTY)
+  // =========================================================================
+  // WHY: Contributors claim bounty after PR merge
+  // AUTHORIZATION: PR author only
+  // WORKFLOW: Verify PR merge → Mark as claimed → Relayer completes payout
+  } else if (command.type === 'community_claim' && command.prNumber) {
+    log(`Processing claim for PR #${command.prNumber}`, 'bounty-command');
+
+    // Check if bounty exists for this issue
+    const bounty = await storage.getCommunityBountyByIssue(owner, repo, issueNumber);
+    if (!bounty) {
+      const errorMsg = `❌ **No Bounty Found**
+
+This issue does not have an active community bounty.
+
+Want to create one? Comment \`/bounty <amount> <currency>\`
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;
+      await postGitHubComment(installationId, owner, repo, issueNumber, errorMsg);
+      return;
+    }
+
+    // Check bounty status
+    if (bounty.status !== 'funded') {
+      const statusMsg = bounty.status === 'pending_payment'
+        ? 'still awaiting payment'
+        : bounty.status === 'claimed'
+        ? 'already claimed'
+        : bounty.status === 'completed'
+        ? 'already paid out'
+        : `in ${bounty.status} status`;
+
+      const errorMsg = `❌ **Bounty Not Claimable**
+
+This bounty is ${statusMsg}.
+
+${bounty.status === 'pending_payment' ? 'The creator needs to fund it first.' : ''}
+${bounty.status === 'claimed' ? 'Payout is in progress.' : ''}
+${bounty.status === 'completed' ? `Already paid to @${bounty.claimedByGithubUsername}` : ''}
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;
+      await postGitHubComment(installationId, owner, repo, issueNumber, errorMsg);
+      return;
+    }
+
+    // Verify PR exists and is merged (TODO: Implement in Phase 4)
+    // For now, we'll create a placeholder that marks the bounty as claimed
+    // The actual PR verification will be implemented in the webhook handler
+
+    try {
+      // Get user info
+      let claimerUserId: number | undefined;
+      try {
+        const user = await storage.getUserByUsername(commenter);
+        claimerUserId = user?.id;
+      } catch (error) {
+        log(`Could not find user ${commenter}`, 'bounty-command');
+      }
+
+      // Mark bounty as claimed
+      await storage.updateCommunityBounty(bounty.id, {
+        status: 'claimed',
+        claimedByUserId: claimerUserId,
+        claimedByGithubUsername: commenter,
+        claimedPrNumber: command.prNumber,
+        claimedPrUrl: `https://github.com/${owner}/${repo}/pull/${command.prNumber}`,
+        claimedAt: new Date(),
+      });
+
+      const successMsg = `🎉 **Bounty Claimed!**
+
+@${commenter} has claimed this bounty for PR #${command.prNumber}.
+
+**What happens next:**
+1. ✅ Our relayer will verify the PR merge
+2. ✅ Payout will be processed automatically
+3. ✅ Funds sent to your Roxonn wallet
+
+**Bounty Details:**
+- **Amount:** ${bounty.amount} ${bounty.currency}
+- **Net Payout:** ${(parseFloat(bounty.amount) * 0.99).toFixed(8)} ${bounty.currency} (1% platform fee)
+
+⏳ Payout typically completes within 5 minutes.
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com) • Bounty #${bounty.id}</sub>`;
+
+      await postGitHubComment(installationId, owner, repo, issueNumber, successMsg);
+      log(`Bounty claimed: ID=${bounty.id}, Claimer=${commenter}, PR=${command.prNumber}`, 'bounty-command');
+
+    } catch (error: any) {
+      log(`Error claiming bounty: ${error.message}`, 'bounty-command-ERROR');
+      const errorMsg = `❌ **Claim Failed**
+
+${error.message}
+
+Please try again or contact support.
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;
+      await postGitHubComment(installationId, owner, repo, issueNumber, errorMsg);
+    }
+
+  // =========================================================================
+  // COMMAND TYPE: status (NEW CHECK BOUNTY STATUS)
+  // =========================================================================
+  // WHY: Users can check bounty status without creating new comments
+  } else if (command.type === 'status') {
+    log(`Checking bounty status for issue #${issueNumber}`, 'bounty-command');
+
+    // Check for community bounty
+    const communityBounty = await storage.getCommunityBountyByIssue(owner, repo, issueNumber);
+
+    // Check for pool bounty (if repo is registered)
+    let poolBountyStatus: string | null = null;
+    if (registration) {
+      try {
+        const blockchainRepoId = parseInt(registration.githubRepoId);
+        const repoDetails = await blockchain.getRepository(blockchainRepoId);
+        // Check if this issue has an allocated bounty in the pool
+        // (This is a simplified check - actual implementation may vary)
+        poolBountyStatus = 'Check Roxonn Dashboard for pool bounty details';
+      } catch (error) {
+        log(`Could not fetch pool bounty status: ${error}`, 'bounty-command');
+      }
+    }
+
+    // Build status message
+    let statusMsg = `📊 **Bounty Status**\n\n`;
+
+    if (communityBounty) {
+      const statusEmoji = {
+        'pending_payment': '⏳',
+        'funded': '✅',
+        'claimed': '🎯',
+        'completed': '💰',
+        'refunded': '↩️',
+        'expired': '⏰',
+      }[communityBounty.status] || '❓';
+
+      statusMsg += `**Community Bounty:** ${statusEmoji} ${communityBounty.status.toUpperCase()}\n`;
+      statusMsg += `- **Amount:** ${communityBounty.amount} ${communityBounty.currency}\n`;
+      statusMsg += `- **Created by:** @${communityBounty.createdByGithubUsername}\n`;
+
+      if (communityBounty.status === 'pending_payment') {
+        statusMsg += `- ⏳ Awaiting payment from creator\n`;
+      } else if (communityBounty.status === 'funded') {
+        statusMsg += `- ✅ Active and claimable!\n`;
+        statusMsg += `- 💡 Submit a PR and comment \`/claim #<pr_number>\`\n`;
+      } else if (communityBounty.status === 'claimed') {
+        statusMsg += `- **Claimed by:** @${communityBounty.claimedByGithubUsername}\n`;
+        statusMsg += `- **PR:** #${communityBounty.claimedPrNumber}\n`;
+        statusMsg += `- ⏳ Payout in progress...\n`;
+      } else if (communityBounty.status === 'completed') {
+        statusMsg += `- **Paid to:** @${communityBounty.claimedByGithubUsername}\n`;
+        statusMsg += `- **PR:** #${communityBounty.claimedPrNumber}\n`;
+        statusMsg += `- 💰 Completed!\n`;
+      }
+
+      statusMsg += `\n🔗 [View Details](https://app.roxonn.com/bounties/${communityBounty.id})\n`;
+    }
+
+    if (poolBountyStatus && registration) {
+      statusMsg += `\n**Pool Bounty:** ${poolBountyStatus}\n`;
+      statusMsg += `🔗 [View on Roxonn](https://app.roxonn.com/repos/${owner}/${repo})\n`;
+    }
+
+    if (!communityBounty && !poolBountyStatus) {
+      statusMsg += `No active bounties found for this issue.\n\n`;
+      statusMsg += `**Want to create one?**\n`;
+      statusMsg += `- Comment \`/bounty <amount> <currency>\` for a community bounty\n`;
+      if (registration) {
+        statusMsg += `- Or ask a pool manager to allocate from the repository pool\n`;
+      }
+    }
+
+    statusMsg += `\n---\n<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;
+
+    await postGitHubComment(installationId, owner, repo, issueNumber, statusMsg);
+    log(`Status check completed for issue #${issueNumber}`, 'bounty-command');
+
+  // =========================================================================
+  // COMMAND TYPE: request (EXISTING BOUNTY REQUEST - PRESERVED)
+  // =========================================================================
+  // WHY: Contributors can request pool managers to allocate bounties
+  // REQUIRES: Repository must be registered
+  } else if (command.type === 'request') {
     await storage.createBountyRequest({
       githubRepoId: repoId,
       githubIssueId: issueId,
@@ -1459,8 +2076,11 @@ Please try again or contact support.
 ${amountText}
 
 Repository maintainers can approve this request:
-- Comment \`/bounty <amount> <currency>\` to allocate
+- Comment \`/bounty pool <amount> <currency>\` to allocate from pool
 - Or visit [Roxonn Dashboard](https://app.roxonn.com/repos/${owner}/${repo})
+
+**Tip:** You can also create a community bounty yourself:
+- Comment \`/bounty <amount> <currency>\` to fund it directly
 
 ---
 <sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;

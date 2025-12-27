@@ -1,4 +1,4 @@
-import { users, registeredRepositories, bountyRequests } from "../shared/schema";
+import { users, registeredRepositories, bountyRequests, communityBounties } from "../shared/schema";
 import { eq, and, sql, inArray, desc } from "drizzle-orm";
 import { db } from "./db";
 import session from "express-session";
@@ -790,6 +790,328 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       log(`Error updating bounty request: ${error instanceof Error ? error.message : String(error)}`, 'storage');
       throw error;
+    }
+  }
+
+  /*
+   * ============================================================================
+   * COMMUNITY BOUNTIES STORAGE METHODS
+   * ============================================================================
+   *
+   * WHY THESE METHODS EXIST:
+   * - Encapsulate all database operations for community bounties
+   * - Provide type-safe interface between business logic and database
+   * - Enable consistent error handling and logging
+   * - Support both pool-based and community bounty models without conflicts
+   */
+
+  /**
+   * Create a new community bounty
+   *
+   * WHY: Initial creation when user initiates bounty via GitHub comment or UI
+   * WHEN: Called from webhook handler or API endpoint
+   * STATES: Creates bounty in 'pending_payment' status
+   */
+  async createCommunityBounty(data: {
+    githubRepoOwner: string;
+    githubRepoName: string;
+    githubIssueNumber: number;
+    githubIssueId: string;
+    githubIssueUrl: string;
+    creatorUserId?: number;
+    createdByGithubUsername: string;
+    title: string;
+    description?: string;
+    amount: string;
+    currency: string;
+    expiresAt?: Date;
+  }): Promise<any> {
+    try {
+      log(`Creating community bounty for issue #${data.githubIssueNumber} in ${data.githubRepoOwner}/${data.githubRepoName}`, 'storage');
+
+      const [bounty] = await db.insert(communityBounties).values({
+        githubRepoOwner: data.githubRepoOwner,
+        githubRepoName: data.githubRepoName,
+        githubIssueNumber: data.githubIssueNumber,
+        githubIssueId: data.githubIssueId,
+        githubIssueUrl: data.githubIssueUrl,
+        creatorUserId: data.creatorUserId || null,
+        createdByGithubUsername: data.createdByGithubUsername,
+        title: data.title,
+        description: data.description || null,
+        amount: data.amount,
+        currency: data.currency,
+        expiresAt: data.expiresAt || null,
+        status: 'pending_payment',
+        paymentStatus: 'pending',
+      }).returning();
+
+      log(`Community bounty created with ID ${bounty.id}`, 'storage');
+      return bounty;
+    } catch (error) {
+      log(`Error creating community bounty: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      throw error;
+    }
+  }
+
+  /**
+   * Get community bounty by ID
+   *
+   * WHY: Retrieve specific bounty for display or processing
+   * USED BY: Payment confirmation, claim processing, API endpoints
+   */
+  async getCommunityBounty(id: number): Promise<any | null> {
+    try {
+      const [bounty] = await db.select()
+        .from(communityBounties)
+        .where(eq(communityBounties.id, id))
+        .limit(1);
+      return bounty || null;
+    } catch (error) {
+      log(`Error fetching community bounty: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return null;
+    }
+  }
+
+  /**
+   * Get community bounty by repo and issue
+   *
+   * WHY: Check if bounty already exists for an issue (prevent duplicates)
+   * WHY unique index allows multiple bounties after refund/expiry
+   * USED BY: Webhook handlers, bounty creation validation
+   */
+  async getCommunityBountyByIssue(
+    githubRepoOwner: string,
+    githubRepoName: string,
+    githubIssueNumber: number
+  ): Promise<any | null> {
+    try {
+      // Only return active bounties (not refunded or expired)
+      // WHY: Unique index allows re-creation after refund, so we filter by status
+      const [bounty] = await db.select()
+        .from(communityBounties)
+        .where(and(
+          eq(communityBounties.githubRepoOwner, githubRepoOwner),
+          eq(communityBounties.githubRepoName, githubRepoName),
+          eq(communityBounties.githubIssueNumber, githubIssueNumber),
+          sql`${communityBounties.status} NOT IN ('refunded', 'expired')`
+        ))
+        .limit(1);
+      return bounty || null;
+    } catch (error) {
+      log(`Error fetching community bounty by issue: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return null;
+    }
+  }
+
+  /**
+   * Get all community bounties for a repository
+   *
+   * WHY: Display all bounties on repo page, sort by newest first
+   * USED BY: Repo detail page, bounty explorer
+   */
+  async getCommunityBountiesByRepo(
+    githubRepoOwner: string,
+    githubRepoName: string,
+    status?: string
+  ): Promise<any[]> {
+    try {
+      const conditions = [
+        eq(communityBounties.githubRepoOwner, githubRepoOwner),
+        eq(communityBounties.githubRepoName, githubRepoName),
+      ];
+
+      if (status) {
+        conditions.push(eq(communityBounties.status, status));
+      }
+
+      const bounties = await db.select()
+        .from(communityBounties)
+        .where(and(...conditions))
+        .orderBy(desc(communityBounties.createdAt));
+
+      return bounties;
+    } catch (error) {
+      log(`Error fetching community bounties by repo: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return [];
+    }
+  }
+
+  /**
+   * Get all active community bounties (for explorer page)
+   *
+   * WHY: Main bounty discovery interface, paginated for performance
+   * WHY only 'funded' status: These are actively claimable bounties
+   */
+  async getActiveCommunityBounties(limit: number = 50, offset: number = 0): Promise<any[]> {
+    try {
+      const bounties = await db.select()
+        .from(communityBounties)
+        .where(eq(communityBounties.status, 'funded'))
+        .orderBy(desc(communityBounties.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      return bounties;
+    } catch (error) {
+      log(`Error fetching active community bounties: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return [];
+    }
+  }
+
+  /**
+   * Get community bounties created by a user
+   *
+   * WHY: User dashboard "My Bounties" page
+   * INCLUDES: All statuses for complete history
+   */
+  async getCommunityBountiesByCreator(userId: number): Promise<any[]> {
+    try {
+      const bounties = await db.select()
+        .from(communityBounties)
+        .where(eq(communityBounties.creatorUserId, userId))
+        .orderBy(desc(communityBounties.createdAt));
+
+      return bounties;
+    } catch (error) {
+      log(`Error fetching community bounties by creator: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return [];
+    }
+  }
+
+  /**
+   * Get community bounties claimed by a user
+   *
+   * WHY: Contributor earnings page, leaderboard calculation
+   * FILTER: Only completed bounties count toward earnings
+   */
+  async getCommunityBountiesByClaimer(userId: number): Promise<any[]> {
+    try {
+      const bounties = await db.select()
+        .from(communityBounties)
+        .where(and(
+          eq(communityBounties.claimedByUserId, userId),
+          eq(communityBounties.status, 'completed')
+        ))
+        .orderBy(desc(communityBounties.payoutExecutedAt));
+
+      return bounties;
+    } catch (error) {
+      log(`Error fetching community bounties by claimer: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return [];
+    }
+  }
+
+  /**
+   * Update community bounty
+   *
+   * WHY: Central update method for all state transitions
+   * USED BY: Payment confirmation, claim processing, payout execution, refunds
+   *
+   * WHY partial updates: Different operations update different fields
+   * - Payment: escrowTxHash, escrowBlockNumber, status='funded'
+   * - Claim: claimedByUserId, claimedAt, status='claimed'
+   * - Payout: payoutTxHash, payoutExecutedAt, status='completed'
+   */
+  async updateCommunityBounty(id: number, data: Partial<{
+    status: string;
+    paymentStatus: string;
+    paymentMethod: string;
+    escrowTxHash: string;
+    escrowBlockNumber: number;
+    escrowDepositedAt: Date;
+    onrampTransactionId: number;
+    claimedByUserId: number;
+    claimedByGithubUsername: string;
+    claimedPrNumber: number;
+    claimedPrUrl: string;
+    claimedAt: Date;
+    payoutTxHash: string;
+    payoutExecutedAt: Date;
+    payoutRecipientAddress: string;
+    refundTxHash: string;
+    refundedAt: Date;
+  }>): Promise<any | null> {
+    try {
+      const [updated] = await db.update(communityBounties)
+        .set({
+          ...data,
+          updatedAt: new Date(),
+        })
+        .where(eq(communityBounties.id, id))
+        .returning();
+
+      log(`Community bounty ${id} updated: ${Object.keys(data).join(', ')}`, 'storage');
+      return updated || null;
+    } catch (error) {
+      log(`Error updating community bounty: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      throw error;
+    }
+  }
+
+  /**
+   * Get expired community bounties (for cleanup job)
+   *
+   * WHY: Background job to automatically refund expired bounties
+   * WHY this query: Indexed on expires_at for fast retrieval
+   * RETURNS: Only 'funded' bounties past expiry date
+   */
+  async getExpiredCommunityBounties(): Promise<any[]> {
+    try {
+      const now = new Date();
+      const bounties = await db.select()
+        .from(communityBounties)
+        .where(and(
+          eq(communityBounties.status, 'funded'),
+          sql`${communityBounties.expiresAt} IS NOT NULL`,
+          sql`${communityBounties.expiresAt} < ${now}`
+        ))
+        .orderBy(communityBounties.expiresAt);
+
+      return bounties;
+    } catch (error) {
+      log(`Error fetching expired community bounties: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return [];
+    }
+  }
+
+  /**
+   * Get claimed community bounties awaiting payout (for relayer)
+   *
+   * WHY: Relayer scans for claimed bounties to process payouts
+   * WHY this query: Indexed on claimed_at + status for fast retrieval
+   * RETURNS: Bounties in 'claimed' status, oldest first (FIFO)
+   */
+  async getClaimedCommunityBounties(): Promise<any[]> {
+    try {
+      const bounties = await db.select()
+        .from(communityBounties)
+        .where(eq(communityBounties.status, 'claimed'))
+        .orderBy(communityBounties.claimedAt);
+
+      return bounties;
+    } catch (error) {
+      log(`Error fetching claimed community bounties: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return [];
+    }
+  }
+
+  /**
+   * Get community bounty by onramp transaction ID
+   *
+   * WHY: Link Onramp webhook to bounty for activation
+   * USED BY: Onramp webhook handler
+   */
+  async getCommunityBountyByOnrampTransaction(onrampTransactionId: number): Promise<any | null> {
+    try {
+      const [bounty] = await db.select()
+        .from(communityBounties)
+        .where(eq(communityBounties.onrampTransactionId, onrampTransactionId))
+        .limit(1);
+      return bounty || null;
+    } catch (error) {
+      log(`Error fetching community bounty by onramp transaction: ${error instanceof Error ? error.message : String(error)}`, 'storage');
+      return null;
     }
   }
 

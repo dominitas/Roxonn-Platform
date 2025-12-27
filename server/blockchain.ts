@@ -32,11 +32,16 @@ const DualCurrencyRepoRewardsContractArtifact = JSON.parse(
 const ProofOfComputeContractArtifact = JSON.parse(
   readFileSync(join(__dirname, '../contracts/artifacts/contracts/ProofOfCompute.sol/ProofOfCompute.json'), 'utf-8')
 );
+// Community Bounty Escrow Contract (NEW)
+const CommunityBountyEscrowContractArtifact = JSON.parse(
+  readFileSync(join(__dirname, '../contracts/artifacts/contracts/CommunityBountyEscrow.sol/CommunityBountyEscrow.json'), 'utf-8')
+);
 
 const CustomForwarderABI = CustomForwarderContract.abi;
 const ROXNTokenABI = ROXNTokenContract.abi;
 const UnifiedRewardsABI = DualCurrencyRepoRewardsContractArtifact.abi;
 const ProofOfComputeABI = ProofOfComputeContractArtifact.abi;
+const CommunityBountyEscrowABI = CommunityBountyEscrowContractArtifact.abi;
 
 interface TransactionRequest {
     to: string;
@@ -77,6 +82,52 @@ interface TokenContract extends ethers.Contract {
     allowance(owner: string, spender: string): Promise<bigint>;
 }
 
+/*
+ * Community Bounty Escrow Contract Interface
+ * WHY: Type-safe interface for community bounty operations
+ */
+interface CommunityBountyEscrowContract extends ethers.Contract {
+    [key: string]: any;
+
+    // Create and fund bounty
+    createBounty(
+        amount: bigint,
+        currency: number, // 0=XDC, 1=ROXN, 2=USDC
+        expiresAt: number, // UNIX timestamp (0 = no expiry)
+        overrides?: ethers.Overrides
+    ): Promise<ethers.ContractTransaction>;
+
+    // Complete bounty (relayer only)
+    completeBounty(
+        bountyId: number,
+        contributor: string,
+        overrides?: ethers.Overrides
+    ): Promise<ethers.ContractTransaction>;
+
+    // Refund bounty (creator only, after expiry)
+    refundBounty(
+        bountyId: number,
+        overrides?: ethers.Overrides
+    ): Promise<ethers.ContractTransaction>;
+
+    // View functions
+    getBounty(bountyId: number): Promise<{
+        creator: string;
+        amount: bigint;
+        currency: number;
+        expiresAt: bigint;
+        status: number; // 0=ACTIVE, 1=COMPLETED, 2=REFUNDED, 3=CANCELLED
+    }>;
+
+    isBountyClaimable(bountyId: number): Promise<boolean>;
+
+    nextBountyId(): Promise<bigint>;
+    relayer(): Promise<string>;
+    feeCollector(): Promise<string>;
+    platformFeeRate(): Promise<bigint>;
+    contributorFeeRate(): Promise<bigint>;
+}
+
 type DualCurrencyRepositoryDetailsTuple = [
     string[],   // poolManagers
     string[],   // contributors
@@ -103,6 +154,8 @@ export class BlockchainService {
     private tokenContract!: TokenContract;
     private usdcTokenContract!: TokenContract; // USDC ERC20 token (USDC rewards handled by main contract)
     private proofOfComputeContract!: ProofOfComputeContract;
+    // Community Bounty Escrow Contract (NEW)
+    private communityBountyEscrowContract!: CommunityBountyEscrowContract;
     private userWallets: Map<string, ethers.Wallet> = new Map();
 
     constructor() {
@@ -260,10 +313,24 @@ export class BlockchainService {
                     ROXNTokenABI, // Same ERC20 interface
                     this.relayerWallet
                 ) as TokenContract;
-                
+
                 log(`USDC Token initialized at ${this.usdcTokenContract.target}`, "blockchain");
             } else {
                 log(`USDC token not configured - skipping USDC support`, "blockchain-warn");
+            }
+
+            // Initialize Community Bounty Escrow Contract (NEW)
+            // WHY: Separate contract for permissionless community bounties
+            if (config.communityBountyEscrowAddress) {
+                this.communityBountyEscrowContract = new ethers.Contract(
+                    config.communityBountyEscrowAddress.replace('xdc', '0x'),
+                    CommunityBountyEscrowABI,
+                    this.relayerWallet
+                ) as CommunityBountyEscrowContract;
+
+                log(`Community Bounty Escrow initialized at ${this.communityBountyEscrowContract.target}`, "blockchain");
+            } else {
+                log(`Community Bounty Escrow not configured - community bounties disabled`, "blockchain-warn");
             }
 
             log(`Unified DualCurrencyRepoRewards contract initialized at ${this.contract.target}`, "blockchain");
@@ -1690,6 +1757,542 @@ export class BlockchainService {
             console.error(`Failed to get compute units for ${walletAddress}:`, error);
             // Return 0 instead of throwing, as the frontend expects a number
             return 0;
+        }
+    }
+
+    // =========================================================================
+    // COMMUNITY BOUNTY ESCROW METHODS
+    // =========================================================================
+
+    /**
+     * Complete a community bounty (relayer-only operation)
+     *
+     * WHY THIS METHOD:
+     * - Called by relayer background job after PR merge verification
+     * - Transfers bounty funds to contributor (minus fees)
+     * - Updates on-chain status to COMPLETED
+     *
+     * WHY RELAYER-ONLY:
+     * - GitHub merge events cannot be verified on-chain
+     * - Prevents front-running attacks
+     * - Prevents contributors claiming without PR merge proof
+     * - Relayer acts as trusted oracle for GitHub state
+     *
+     * FLOW:
+     * 1. Relayer background job detects PR merge event
+     * 2. Verifies PR was merged and closes the issue
+     * 3. Calls this method with bountyId + contributor address
+     * 4. Smart contract validates bounty is claimable
+     * 5. Transfers funds to contributor (deducts fees)
+     * 6. Emits BountyCompleted event
+     *
+     * @param bountyId - On-chain bounty ID from createBounty() return value
+     * @param contributorAddress - XDC wallet address (xdc... format)
+     * @returns Transaction hash and block number
+     */
+    async completeCommunityBounty(
+        bountyId: number,
+        contributorAddress: string
+    ): Promise<{ txHash: string; blockNumber: number }> {
+        try {
+            // WHY CONVERT: Contract expects 0x prefix, we store xdc prefix
+            const ethContributorAddress = contributorAddress.replace('xdc', '0x');
+
+            log(`Completing community bounty ${bountyId} for contributor ${contributorAddress}`, "blockchain");
+
+            // WHY RELAYER WALLET: Only relayer is authorized to call completeBounty()
+            // This was set during contract deployment
+            const contractWithSigner = this.communityBountyEscrowContract.connect(this.relayerWallet);
+
+            // WHY VERIFY FIRST: Fail fast if bounty is not in valid state
+            const isClaimable = await this.communityBountyEscrowContract.isBountyClaimable(bountyId);
+            if (!isClaimable) {
+                throw new Error(`Bounty ${bountyId} is not claimable. Status may be COMPLETED, REFUNDED, CANCELLED, or EXPIRED`);
+            }
+
+            // WHY GAS PRICE BUFFER: XDC network gas prices can fluctuate
+            const feeData = await this.provider.getFeeData();
+            const gasPrice = feeData.gasPrice ? feeData.gasPrice * BigInt(120) / BigInt(100) : undefined;
+
+            // WHY ESTIMATE GAS: Prevents transaction failure due to out-of-gas
+            const estimateGasFunc = contractWithSigner.getFunction('completeBounty');
+            const estimatedGas = await estimateGasFunc.estimateGas(bountyId, ethContributorAddress);
+            const safeGasLimit = estimatedGas * BigInt(130) / BigInt(100);
+
+            log(`Estimated gas: ${estimatedGas}, safe gas limit: ${safeGasLimit}`, "blockchain");
+
+            // WHY WAIT: Ensures transaction is confirmed before updating DB
+            const tx = await contractWithSigner.completeBounty(bountyId, ethContributorAddress, {
+                gasPrice,
+                gasLimit: safeGasLimit
+            });
+
+            log(`Community bounty completion transaction sent. TX hash: ${tx.hash}`, "blockchain");
+
+            const receipt = await tx.wait();
+
+            if (!receipt) {
+                throw new Error('Failed to complete bounty: Transaction failed to confirm');
+            }
+
+            log(`Community bounty ${bountyId} completed successfully in block ${receipt.blockNumber}`, "blockchain");
+
+            return {
+                txHash: receipt.hash,
+                blockNumber: receipt.blockNumber
+            };
+        } catch (error) {
+            console.error(`Failed to complete community bounty ${bountyId}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get community bounty details from blockchain
+     *
+     * WHY THIS METHOD:
+     * - Verify on-chain state before completing bounty
+     * - Validate bounty exists and is in correct status
+     * - Cross-reference with database state
+     *
+     * WHY NEEDED:
+     * - Database may be out of sync with blockchain
+     * - Prevents completing already-completed bounties
+     * - Provides source of truth for bounty state
+     *
+     * WHEN CALLED:
+     * - Before calling completeCommunityBounty()
+     * - During bounty status checks
+     * - For debugging payment issues
+     *
+     * @param bountyId - On-chain bounty ID
+     * @returns Bounty details (creator, amount, currency, status, expiry)
+     */
+    async getCommunityBountyFromChain(bountyId: number): Promise<{
+        creator: string;
+        amount: string;
+        currency: 'XDC' | 'ROXN' | 'USDC';
+        status: 'ACTIVE' | 'COMPLETED' | 'REFUNDED' | 'CANCELLED';
+        expiresAt: number;
+    }> {
+        try {
+            log(`Fetching community bounty ${bountyId} from blockchain`, "blockchain");
+
+            const bounty = await this.communityBountyEscrowContract.getBounty(bountyId);
+
+            // WHY MAP STATUS: Contract returns numeric enum, we need string
+            const statusMap = ['ACTIVE', 'COMPLETED', 'REFUNDED', 'CANCELLED'] as const;
+            const status = statusMap[bounty.status] || 'ACTIVE';
+
+            // WHY MAP CURRENCY: Contract returns numeric enum, we need string
+            const currencyMap = ['XDC', 'ROXN', 'USDC'] as const;
+            const currency = currencyMap[bounty.currency] || 'XDC';
+
+            // WHY CONVERT ADDRESS: Return xdc prefix for consistency with DB
+            const creatorAddress = bounty.creator.replace('0x', 'xdc');
+
+            // WHY FORMAT AMOUNT: Return human-readable amount (18 decimals)
+            const amount = ethers.formatEther(bounty.amount);
+
+            log(`Bounty ${bountyId}: ${amount} ${currency}, status: ${status}, creator: ${creatorAddress}`, "blockchain");
+
+            return {
+                creator: creatorAddress,
+                amount,
+                currency,
+                status,
+                expiresAt: Number(bounty.expiresAt)
+            };
+        } catch (error) {
+            console.error(`Failed to get community bounty ${bountyId} from chain:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Refund an expired community bounty
+     *
+     * WHY THIS METHOD:
+     * - Allows creator to recover funds if bounty expires unclaimed
+     * - Enforces expiry timestamp check on-chain
+     * - Returns full amount to creator (no fees on refund)
+     *
+     * WHY CREATOR-ONLY:
+     * - Only creator should be able to trigger refund
+     * - Prevents malicious refunds by other parties
+     * - Creator pays gas for refund transaction
+     *
+     * FLOW:
+     * 1. Creator calls this method after expiry timestamp
+     * 2. Contract validates expiry timestamp has passed
+     * 3. Contract validates status is ACTIVE
+     * 4. Transfers full amount back to creator
+     * 5. Updates status to REFUNDED
+     * 6. Emits BountyRefunded event
+     *
+     * @param bountyId - On-chain bounty ID
+     * @param creatorAddress - XDC wallet address of creator (xdc... format)
+     * @returns Transaction hash and block number
+     */
+    async refundCommunityBounty(
+        bountyId: number,
+        creatorAddress: string
+    ): Promise<{ txHash: string; blockNumber: number }> {
+        try {
+            log(`Refunding community bounty ${bountyId} for creator ${creatorAddress}`, "blockchain");
+
+            // WHY CONVERT: Contract expects 0x prefix
+            const ethCreatorAddress = creatorAddress.replace('xdc', '0x');
+
+            // WHY CREATOR WALLET: Refund must be called by bounty creator
+            // Contract enforces this via onlyCreator modifier
+            const user = await storage.getUserByWalletAddress(creatorAddress);
+            if (!user || !user.walletReferenceId) {
+                throw new Error(`User not found for wallet address: ${creatorAddress}`);
+            }
+
+            const userPrivateKey = await this.getWalletSecret(user.walletReferenceId);
+            const creatorWallet = new ethers.Wallet(userPrivateKey.privateKey, this.provider);
+
+            // WHY VERIFY ADDRESS MATCH: Prevent refund to wrong wallet
+            const creatorWalletAddress = creatorWallet.address.toLowerCase();
+            if (creatorWalletAddress !== ethCreatorAddress.toLowerCase()) {
+                throw new Error(`Wallet address mismatch: ${creatorWalletAddress} vs ${ethCreatorAddress}`);
+            }
+
+            const contractWithSigner = this.communityBountyEscrowContract.connect(creatorWallet);
+
+            // WHY VERIFY FIRST: Get bounty details to show in logs
+            const bounty = await this.getCommunityBountyFromChain(bountyId);
+            log(`Bounty details: ${bounty.amount} ${bounty.currency}, status: ${bounty.status}, expiresAt: ${bounty.expiresAt}`, "blockchain");
+
+            // WHY CHECK EXPIRY: Contract will revert if not expired, but fail fast
+            if (bounty.expiresAt > 0 && Date.now() / 1000 < bounty.expiresAt) {
+                throw new Error(`Bounty ${bountyId} has not expired yet. Expires at: ${new Date(bounty.expiresAt * 1000).toISOString()}`);
+            }
+
+            if (bounty.status !== 'ACTIVE') {
+                throw new Error(`Bounty ${bountyId} is not active. Current status: ${bounty.status}`);
+            }
+
+            // WHY ENSURE GAS: Creator may not have enough XDC for gas
+            log(`Ensuring creator has enough XDC for refund transaction`, "blockchain");
+            const gasWasSubsidized = await this.ensureUserHasGas(ethCreatorAddress);
+
+            if (gasWasSubsidized) {
+                log(`Gas was subsidized, waiting for network to stabilize...`, "blockchain");
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+
+            // WHY GAS PRICE BUFFER: XDC network gas prices can fluctuate
+            const feeData = await this.provider.getFeeData();
+            const gasPrice = feeData.gasPrice ? feeData.gasPrice * BigInt(120) / BigInt(100) : undefined;
+
+            // WHY ESTIMATE GAS: Prevents transaction failure due to out-of-gas
+            const estimateGasFunc = contractWithSigner.getFunction('refundBounty');
+            const estimatedGas = await estimateGasFunc.estimateGas(bountyId);
+            const safeGasLimit = estimatedGas * BigInt(130) / BigInt(100);
+
+            log(`Estimated gas: ${estimatedGas}, safe gas limit: ${safeGasLimit}`, "blockchain");
+
+            const tx = await contractWithSigner.refundBounty(bountyId, {
+                gasPrice,
+                gasLimit: safeGasLimit
+            });
+
+            log(`Community bounty refund transaction sent. TX hash: ${tx.hash}`, "blockchain");
+
+            const receipt = await tx.wait();
+
+            if (!receipt) {
+                throw new Error('Failed to refund bounty: Transaction failed to confirm');
+            }
+
+            log(`Community bounty ${bountyId} refunded successfully in block ${receipt.blockNumber}`, "blockchain");
+
+            return {
+                txHash: receipt.hash,
+                blockNumber: receipt.blockNumber
+            };
+        } catch (error) {
+            console.error(`Failed to refund community bounty ${bountyId}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get next available bounty ID from contract
+     *
+     * WHY THIS METHOD:
+     * - Predict bounty ID before creating it
+     * - Used for database record creation before blockchain transaction
+     * - Allows linking DB record to pending blockchain transaction
+     *
+     * USAGE:
+     * - Call before createBounty() transaction
+     * - Store in DB as blockchain_bounty_id
+     * - Use for transaction tracking and error recovery
+     *
+     * @returns Next bounty ID that will be assigned
+     */
+    async getNextCommunityBountyId(): Promise<number> {
+        try {
+            const nextId = await this.communityBountyEscrowContract.nextBountyId();
+            return Number(nextId);
+        } catch (error) {
+            console.error('Failed to get next community bounty ID:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Create community bounty with XDC
+     *
+     * WHY THIS METHOD:
+     * - Users pay bounty amount in XDC directly to escrow contract
+     * - Amount is locked on-chain until PR merge or expiry
+     * - No pool manager required (permissionless)
+     *
+     * FLOW:
+     * 1. User specifies bounty amount in XDC
+     * 2. Call createBounty() with XDC value
+     * 3. Contract locks funds in escrow
+     * 4. Returns bounty ID for DB tracking
+     *
+     * @param userId - User creating the bounty
+     * @param amountXdc - Amount in XDC (as string, e.g., "10.5")
+     * @param expiryTimestamp - Unix timestamp for expiry (0 = no expiry)
+     * @returns Transaction response and bounty ID
+     */
+    async createCommunityBountyWithXDC(
+        userId: number,
+        amountXdc: string,
+        expiryTimestamp: number = 0
+    ): Promise<{ tx: ethers.TransactionResponse; bountyId: number }> {
+        try {
+            log(`Creating community bounty with ${amountXdc} XDC for user ${userId}`, 'blockchain');
+
+            const user = await storage.getUserById(userId);
+            if (!user || !user.xdcWalletAddress || !user.walletReferenceId) {
+                throw new Error('User wallet not found');
+            }
+
+            const amountWei = ethers.parseEther(amountXdc);
+            const userAddress = user.xdcWalletAddress.replace('xdc', '0x');
+
+            // WHY ENSURE GAS: User may not have enough XDC for gas
+            log(`Ensuring user has enough XDC for gas + bounty amount`, 'blockchain');
+            const gasWasSubsidized = await this.ensureUserHasGas(user.xdcWalletAddress, amountXdc);
+
+            if (gasWasSubsidized) {
+                log(`Gas subsidized, waiting 5s for network...`, 'blockchain');
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+
+            // Get next bounty ID before creating
+            const nextBountyId = await this.getNextCommunityBountyId();
+
+            const userPrivateKey = await this.getWalletSecret(user.walletReferenceId);
+            const userWallet = new ethers.Wallet(userPrivateKey.privateKey, this.provider);
+
+            const contractWithSigner = this.communityBountyEscrowContract.connect(userWallet);
+
+            const feeData = await this.provider.getFeeData();
+            const gasPrice = feeData.gasPrice ? feeData.gasPrice * BigInt(120) / BigInt(100) : undefined;
+
+            // WHY CURRENCY 0: XDC = 0, ROXN = 1, USDC = 2 (enum in contract)
+            const estimateGasFunc = contractWithSigner.getFunction('createBounty');
+            const estimatedGas = await estimateGasFunc.estimateGas(amountWei, 0, expiryTimestamp, { value: amountWei });
+            const safeGasLimit = estimatedGas * BigInt(130) / BigInt(100);
+
+            const tx = await contractWithSigner.createBounty(amountWei, 0, expiryTimestamp, {
+                value: amountWei,
+                gasPrice,
+                gasLimit: safeGasLimit
+            });
+
+            log(`Community bounty creation tx sent. TX: ${tx.hash}, Expected bounty ID: ${nextBountyId}`, 'blockchain');
+
+            const receipt = await tx.wait();
+            if (!receipt) {
+                throw new Error('Transaction failed to confirm');
+            }
+
+            log(`Community bounty ${nextBountyId} created successfully with ${amountXdc} XDC`, 'blockchain');
+
+            return { tx, bountyId: nextBountyId };
+        } catch (error: any) {
+            log(`Error creating community bounty with XDC: ${error.message}`, 'blockchain-ERROR');
+            throw error;
+        }
+    }
+
+    /**
+     * Create community bounty with ROXN
+     *
+     * WHY THIS METHOD:
+     * - Users pay bounty in platform token (ROXN)
+     * - Requires approve + createBounty (2-step process)
+     * - Amount is locked in escrow on-chain
+     *
+     * FLOW:
+     * 1. Approve ROXN token transfer to escrow contract
+     * 2. Call createBounty() with ROXN currency type
+     * 3. Contract pulls ROXN from user and locks in escrow
+     * 4. Returns bounty ID for DB tracking
+     *
+     * @param userId - User creating the bounty
+     * @param amountRoxn - Amount in ROXN (as string)
+     * @param expiryTimestamp - Unix timestamp for expiry (0 = no expiry)
+     * @returns Transaction response and bounty ID
+     */
+    async createCommunityBountyWithROXN(
+        userId: number,
+        amountRoxn: string,
+        expiryTimestamp: number = 0
+    ): Promise<{ tx: ethers.TransactionResponse; bountyId: number }> {
+        try {
+            log(`Creating community bounty with ${amountRoxn} ROXN for user ${userId}`, 'blockchain');
+
+            const user = await storage.getUserById(userId);
+            if (!user || !user.xdcWalletAddress || !user.walletReferenceId) {
+                throw new Error('User wallet not found');
+            }
+
+            // STEP 1: Approve ROXN tokens
+            log(`Approving ${amountRoxn} ROXN for community bounty escrow`, 'blockchain');
+            await this.approveTokensForContract(amountRoxn, userId, this.communityBountyEscrowContract.target as string);
+
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            // STEP 2: Create bounty
+            const amountWei = ethers.parseEther(amountRoxn);
+            const nextBountyId = await this.getNextCommunityBountyId();
+
+            const userPrivateKey = await this.getWalletSecret(user.walletReferenceId);
+            const userWallet = new ethers.Wallet(userPrivateKey.privateKey, this.provider);
+
+            const contractWithSigner = this.communityBountyEscrowContract.connect(userWallet);
+
+            const feeData = await this.provider.getFeeData();
+            const gasPrice = feeData.gasPrice ? feeData.gasPrice * BigInt(120) / BigInt(100) : undefined;
+
+            // WHY CURRENCY 1: XDC = 0, ROXN = 1, USDC = 2
+            const estimateGasFunc = contractWithSigner.getFunction('createBounty');
+            const estimatedGas = await estimateGasFunc.estimateGas(amountWei, 1, expiryTimestamp);
+            const safeGasLimit = estimatedGas * BigInt(130) / BigInt(100);
+
+            const tx = await contractWithSigner.createBounty(amountWei, 1, expiryTimestamp, {
+                gasPrice,
+                gasLimit: safeGasLimit
+            });
+
+            log(`Community bounty creation tx sent. TX: ${tx.hash}, Expected bounty ID: ${nextBountyId}`, 'blockchain');
+
+            const receipt = await tx.wait();
+            if (!receipt) {
+                throw new Error('Transaction failed to confirm');
+            }
+
+            log(`Community bounty ${nextBountyId} created successfully with ${amountRoxn} ROXN`, 'blockchain');
+
+            return { tx, bountyId: nextBountyId };
+        } catch (error: any) {
+            log(`Error creating community bounty with ROXN: ${error.message}`, 'blockchain-ERROR');
+            throw error;
+        }
+    }
+
+    /**
+     * Create community bounty with USDC
+     *
+     * WHY THIS METHOD:
+     * - Users pay bounty in stablecoin (USDC)
+     * - Predictable value for contributors
+     * - Requires approve + createBounty (2-step process)
+     *
+     * FLOW:
+     * 1. Approve USDC token transfer to escrow contract
+     * 2. Call createBounty() with USDC currency type
+     * 3. Contract pulls USDC from user and locks in escrow
+     * 4. Returns bounty ID for DB tracking
+     *
+     * WHY USDC HAS 6 DECIMALS:
+     * - Unlike XDC/ROXN (18 decimals), USDC uses 6 decimals
+     * - parseUnits(amount, 6) instead of parseEther()
+     *
+     * @param userId - User creating the bounty
+     * @param amountUsdc - Amount in USDC (as string)
+     * @param expiryTimestamp - Unix timestamp for expiry (0 = no expiry)
+     * @returns Transaction response and bounty ID
+     */
+    async createCommunityBountyWithUSDC(
+        userId: number,
+        amountUsdc: string,
+        expiryTimestamp: number = 0
+    ): Promise<{ tx: ethers.TransactionResponse; bountyId: number }> {
+        try {
+            if (!this.usdcTokenContract) {
+                throw new Error('USDC token not initialized');
+            }
+
+            log(`Creating community bounty with ${amountUsdc} USDC for user ${userId}`, 'blockchain');
+
+            const user = await storage.getUserById(userId);
+            if (!user || !user.xdcWalletAddress || !user.walletReferenceId) {
+                throw new Error('User wallet not found');
+            }
+
+            // STEP 1: Approve USDC tokens
+            log(`Approving ${amountUsdc} USDC for community bounty escrow`, 'blockchain');
+
+            const amountInSmallestUnit = ethers.parseUnits(amountUsdc, 6); // USDC has 6 decimals
+
+            const userPrivateKey = await this.getWalletSecret(user.walletReferenceId);
+            const userWallet = new ethers.Wallet(userPrivateKey.privateKey, this.provider);
+
+            const usdcTokenWithSigner = this.usdcTokenContract.connect(userWallet) as TokenContract;
+
+            const approveTx = await usdcTokenWithSigner.approve(
+                this.communityBountyEscrowContract.target as string,
+                amountInSmallestUnit
+            );
+            await approveTx.wait();
+            log(`USDC approval confirmed for ${amountUsdc} USDC`, 'blockchain');
+
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // STEP 2: Create bounty
+            const nextBountyId = await this.getNextCommunityBountyId();
+
+            const contractWithSigner = this.communityBountyEscrowContract.connect(userWallet);
+
+            const feeData = await this.provider.getFeeData();
+            const gasPrice = feeData.gasPrice ? feeData.gasPrice * BigInt(120) / BigInt(100) : undefined;
+
+            // WHY CURRENCY 2: XDC = 0, ROXN = 1, USDC = 2
+            const estimateGasFunc = contractWithSigner.getFunction('createBounty');
+            const estimatedGas = await estimateGasFunc.estimateGas(amountInSmallestUnit, 2, expiryTimestamp);
+            const safeGasLimit = estimatedGas * BigInt(130) / BigInt(100);
+
+            const tx = await contractWithSigner.createBounty(amountInSmallestUnit, 2, expiryTimestamp, {
+                gasPrice,
+                gasLimit: safeGasLimit
+            });
+
+            log(`Community bounty creation tx sent. TX: ${tx.hash}, Expected bounty ID: ${nextBountyId}`, 'blockchain');
+
+            const receipt = await tx.wait();
+            if (!receipt) {
+                throw new Error('Transaction failed to confirm');
+            }
+
+            log(`Community bounty ${nextBountyId} created successfully with ${amountUsdc} USDC`, 'blockchain');
+
+            return { tx, bountyId: nextBountyId };
+        } catch (error: any) {
+            log(`Error creating community bounty with USDC: ${error.message}`, 'blockchain-ERROR');
+            throw error;
         }
     }
 }

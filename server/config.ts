@@ -158,6 +158,10 @@ export const baseConfig = {
   // Proof of Compute V1
   proofOfComputeContractAddress: process.env.PROOF_OF_COMPUTE_CONTRACT_ADDRESS,
   xdcRpcUrl: process.env.XDC_RPC_URL,
+
+  // Community Bounty Escrow Contract (NEW)
+  // WHY: Separate contract for permissionless community bounties on any public repo
+  communityBountyEscrowAddress: process.env.COMMUNITY_BOUNTY_ESCROW_ADDRESS,
 } as const;
 
 // Full configuration with sensitive values that will be populated

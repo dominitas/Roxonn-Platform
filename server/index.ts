@@ -32,6 +32,7 @@ import { config, initializeConfig, validateConfig } from './config';
 import rateLimit from 'express-rate-limit';
 import { updateOfflineNodes } from './services/exoNodeService';
 import { verifyAndSecureContainers } from './azure-media';
+import { startCommunityBountyRelayer } from './communityBountyRelayer';
 
 // Initialize the app but don't start it yet
 const app = express();
@@ -522,6 +523,11 @@ async function startServer() {
         log(`Error updating offline nodes: ${error}`, 'cron-ERROR');
       }
     }, 60 * 1000);
+
+    // Start community bounty relayer service (processes claimed bounties)
+    // WHY: Verifies PR merges and completes bounty payouts on-chain
+    // Runs every 30 seconds to ensure timely payments
+    startCommunityBountyRelayer(30000);
 
     // Handle graceful shutdown
     setupShutdownHandlers();

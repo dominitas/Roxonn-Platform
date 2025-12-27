@@ -619,3 +619,109 @@ export const bountyRequests = pgTable("bounty_requests", {
 
 export type BountyRequest = typeof bountyRequests.$inferSelect;
 export type NewBountyRequest = typeof bountyRequests.$inferInsert;
+
+/*
+ * Community Bounties Table
+ * WHY: Separate from pool bounties - different funding model, authorization, and lifecycle
+ * Allows ANY user to create bounties on ANY public GitHub repo without pool registration
+ */
+export const communityBounties = pgTable("community_bounties", {
+  id: serial("id").primaryKey(),
+
+  // GitHub identifiers (no FK to registered_repositories - works on any public repo)
+  githubRepoOwner: text("github_repo_owner").notNull(),
+  githubRepoName: text("github_repo_name").notNull(),
+  githubIssueNumber: integer("github_issue_number").notNull(),
+  githubIssueId: text("github_issue_id").notNull(),
+  githubIssueUrl: text("github_issue_url").notNull(),
+
+  // Creator
+  creatorUserId: integer("creator_user_id").references(() => users.id, { onDelete: 'set null' }),
+  createdByGithubUsername: text("created_by_github_username").notNull(),
+
+  // Bounty details
+  title: text("title").notNull(),
+  description: text("description"),
+
+  // Reward configuration
+  amount: decimal("amount", { precision: 18, scale: 8 }).notNull(),
+  currency: text("currency").notNull(), // USDC, XDC, ROXN
+
+  // Blockchain escrow tracking
+  escrowTxHash: text("escrow_tx_hash"),
+  escrowBlockNumber: integer("escrow_block_number"),
+  escrowDepositedAt: timestamp("escrow_deposited_at", { mode: 'date', withTimezone: true }),
+
+  // Payment tracking (fiat/crypto)
+  paymentMethod: text("payment_method"), // 'crypto', 'fiat'
+  paymentStatus: text("payment_status").default("pending").notNull(), // 'pending', 'completed', 'failed'
+  onrampTransactionId: integer("onramp_transaction_id").references(() => onrampTransactions.id),
+
+  // Status lifecycle
+  status: text("status").default("pending_payment").notNull(),
+  // 'pending_payment' → 'funded' → 'claimed' → 'completed' | 'refunded' | 'expired'
+
+  // Claim tracking
+  claimedByUserId: integer("claimed_by_user_id").references(() => users.id, { onDelete: 'set null' }),
+  claimedByGithubUsername: text("claimed_by_github_username"),
+  claimedPrNumber: integer("claimed_pr_number"),
+  claimedPrUrl: text("claimed_pr_url"),
+  claimedAt: timestamp("claimed_at", { mode: 'date', withTimezone: true }),
+
+  // Payout tracking
+  payoutTxHash: text("payout_tx_hash"),
+  payoutExecutedAt: timestamp("payout_executed_at", { mode: 'date', withTimezone: true }),
+  payoutRecipientAddress: text("payout_recipient_address"),
+
+  // Expiry and refund
+  expiresAt: timestamp("expires_at", { mode: 'date', withTimezone: true }),
+  refundTxHash: text("refund_tx_hash"),
+  refundedAt: timestamp("refunded_at", { mode: 'date', withTimezone: true }),
+
+  // Metadata
+  metadata: jsonb("metadata").default('{}'),
+
+  // Timestamps
+  createdAt: timestamp("created_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+});
+
+export type CommunityBounty = typeof communityBounties.$inferSelect;
+export type NewCommunityBounty = typeof communityBounties.$inferInsert;
+
+// Zod schemas for validation
+export const createCommunityBountySchema = z.object({
+  githubRepoOwner: z.string().min(1),
+  githubRepoName: z.string().min(1),
+  githubIssueNumber: z.number().int().positive(),
+  githubIssueId: z.string().min(1),
+  githubIssueUrl: z.string().url(),
+  title: z.string().min(1).max(500),
+  description: z.string().optional(),
+  amount: z.string().regex(/^\d+(\.\d{1,8})?$/), // Decimal string validation
+  currency: z.enum(['USDC', 'XDC', 'ROXN']),
+  expiresAt: z.date().optional(),
+});
+
+export const updateCommunityBountySchema = z.object({
+  status: z.enum(['pending_payment', 'funded', 'claimed', 'completed', 'refunded', 'expired']).optional(),
+  paymentStatus: z.enum(['pending', 'completed', 'failed']).optional(),
+  paymentMethod: z.enum(['crypto', 'fiat']).optional(),
+  escrowTxHash: z.string().optional(),
+  escrowBlockNumber: z.number().int().optional(),
+  escrowDepositedAt: z.date().optional(),
+  claimedByUserId: z.number().int().optional(),
+  claimedByGithubUsername: z.string().optional(),
+  claimedPrNumber: z.number().int().optional(),
+  claimedPrUrl: z.string().url().optional(),
+  claimedAt: z.date().optional(),
+  payoutTxHash: z.string().optional(),
+  payoutExecutedAt: z.date().optional(),
+  payoutRecipientAddress: z.string().optional(),
+  refundTxHash: z.string().optional(),
+  refundedAt: z.date().optional(),
+  onrampTransactionId: z.number().int().optional(),
+}).partial();
+
+export type CreateCommunityBountyInput = z.infer<typeof createCommunityBountySchema>;
+export type UpdateCommunityBountyInput = z.infer<typeof updateCommunityBountySchema>;
