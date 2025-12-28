@@ -2067,7 +2067,10 @@ export class BlockchainService {
     async createCommunityBountyWithXDC(
         userId: number,
         amountXdc: string,
-        expiryTimestamp: number = 0
+        expiryTimestamp: number = 0,
+        baseBountyAmount?: string,
+        clientFeeAmount?: string,
+        contributorFeeAmount?: string
     ): Promise<{ tx: ethers.TransactionResponse; bountyId: number }> {
         try {
             log(`Creating community bounty with ${amountXdc} XDC for user ${userId}`, 'blockchain');
@@ -2149,7 +2152,10 @@ export class BlockchainService {
     async createCommunityBountyWithROXN(
         userId: number,
         amountRoxn: string,
-        expiryTimestamp: number = 0
+        expiryTimestamp: number = 0,
+        baseBountyAmount?: string,
+        clientFeeAmount?: string,
+        contributorFeeAmount?: string
     ): Promise<{ tx: ethers.TransactionResponse; bountyId: number }> {
         try {
             log(`Creating community bounty with ${amountRoxn} ROXN for user ${userId}`, 'blockchain');
@@ -2229,7 +2235,10 @@ export class BlockchainService {
     async createCommunityBountyWithUSDC(
         userId: number,
         amountUsdc: string,
-        expiryTimestamp: number = 0
+        expiryTimestamp: number = 0,
+        baseBountyAmount?: string,
+        clientFeeAmount?: string,
+        contributorFeeAmount?: string
     ): Promise<{ tx: ethers.TransactionResponse; bountyId: number }> {
         try {
             if (!this.usdcTokenContract) {

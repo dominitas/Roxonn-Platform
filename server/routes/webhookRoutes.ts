@@ -52,6 +52,21 @@ async function handleGitHubAppWebhook(req: Request, res: Response) {
     return res.status(400).json({ error: 'Missing installation ID' });
   }
 
+  // CRITICAL-1 FIX: Webhook Delivery Idempotency Check
+  // Check if we've already processed this exact webhook delivery
+  const isFirstDelivery = await storage.recordWebhookDelivery(
+    delivery,
+    event,
+    payload.action || null,
+    payload.repository?.id ? String(payload.repository.id) : null,
+    installationId
+  );
+
+  if (!isFirstDelivery) {
+    log(`Duplicate webhook delivery detected: ${delivery}. Skipping processing.`, 'webhook-app');
+    return res.status(200).json({ message: 'Duplicate delivery ignored' });
+  }
+
   log(`Processing event '${event}'...`, 'webhook-app');
 
   try {
@@ -60,6 +75,7 @@ async function handleGitHubAppWebhook(req: Request, res: Response) {
       const installationId = (payload as any).installation?.id;
       log(`Installation event received: ${payload.action}, installation ${installationId}`, 'webhook-app');
       // TODO: Implement storage.upsert/remove for installation tracking
+      await storage.markWebhookDeliveryCompleted(delivery);
       return res.status(200).json({ message: 'Installation event processed.' });
 
       // --- Handle Issue Comment for Bounty Commands ---
@@ -70,12 +86,16 @@ async function handleGitHubAppWebhook(req: Request, res: Response) {
       if (command) {
         log(`Processing bounty command from ${payload.sender?.login} on issue #${payload.issue?.number}`, 'webhook-app');
         setImmediate(() => {
-          handleBountyCommand(payload, installationId).catch(err => {
-            log(`Error processing bounty command: ${err?.message || err}`, 'webhook-app');
-          });
+          handleBountyCommand(payload, installationId)
+            .then(() => storage.markWebhookDeliveryCompleted(delivery))
+            .catch(err => {
+              log(`Error processing bounty command: ${err?.message || err}`, 'webhook-app');
+              storage.markWebhookDeliveryFailed(delivery, err?.message || String(err));
+            });
         });
         return res.status(202).json({ message: 'Bounty command processing initiated.' });
       }
+      await storage.markWebhookDeliveryCompleted(delivery);
       return res.status(200).json({ message: 'Comment ignored - no bounty command' });
 
       // --- Handle Issue Closed for Payout ---
@@ -83,9 +103,12 @@ async function handleGitHubAppWebhook(req: Request, res: Response) {
       log(`Processing App issue closed event for #${payload.issue?.number}`, 'webhook-app');
       setImmediate(() => {
         // Pass payload ONLY for now. Handler will generate token.
-        handleIssueClosed(payload, installationId).catch(err => {
-          log(`Error in background App Issue Closed handler: ${err?.message || err}`, 'webhook-app');
-        });
+        handleIssueClosed(payload, installationId)
+          .then(() => storage.markWebhookDeliveryCompleted(delivery))
+          .catch(err => {
+            log(`Error in background App Issue Closed handler: ${err?.message || err}`, 'webhook-app');
+            storage.markWebhookDeliveryFailed(delivery, err?.message || String(err));
+          });
       });
       return res.status(202).json({ message: 'Webhook received and Issue Closed processing initiated.' });
 
@@ -106,15 +129,18 @@ async function handleGitHubAppWebhook(req: Request, res: Response) {
       } catch (err: any) {
         log(`Error updating repository visibility: ${err?.message || err}`, 'webhook-app');
       }
+      await storage.markWebhookDeliveryCompleted(delivery);
       return res.status(200).json({ message: 'Repository visibility update processed.' });
 
       // --- Ignore Other Events ---
     } else {
       log(`Ignoring App event ${event} with action ${payload.action}`, 'webhook-app');
+      await storage.markWebhookDeliveryCompleted(delivery);
       return res.status(200).json({ message: 'Event ignored' });
     }
   } catch (error: any) {
     log(`App Webhook processing error: ${error?.message || error}`, 'webhook-app');
+    await storage.markWebhookDeliveryFailed(delivery, error?.message || String(error));
     if (!res.headersSent) {
       return res.status(500).json({ error: 'App webhook processing failed' });
     }

@@ -1177,6 +1177,9 @@ export async function handleIssueClosed(payload: WebhookPayload, installationId:
 
   // 3. Check Bounty on Blockchain
   let issueBounty: IssueBountyDetails | null = null;
+  let amountStr: string | null = null;
+  let currency: string = '';
+
   try {
     // USE REPOSITORY-SPECIFIC issueNumber FOR BLOCKCHAIN CALLS
     const issueBountyDetailsArray = await blockchain.getIssueRewards(repoId, [issueNumber]);
@@ -1187,8 +1190,6 @@ export async function handleIssueClosed(payload: WebhookPayload, installationId:
     issueBounty = issueBountyDetailsArray[0];
 
     // Determine currency type and amount (check USDC first, then ROXN, then XDC)
-    let amountStr: string | null = null;
-    let currency: string;
 
     const usdcAmount = parseFloat(issueBounty.usdcAmount || "0");
     const roxnAmount = parseFloat(issueBounty.roxnAmount || "0");
@@ -1340,7 +1341,14 @@ export async function handleIssueClosed(payload: WebhookPayload, installationId:
   }
   log(`Found pool manager: ${poolManager.id} (${poolManager.username})`, 'webhook-issue');
 
-  // 7. Distribute Reward
+  // 7. CRITICAL-2 FIX: Check Payout Idempotency
+  const existingPayout = await storage.getPayoutByRepoAndIssue(String(repoId), issueNumber);
+  if (existingPayout) {
+    log(`Payout already processed for repo ${repoId} issue #${issueNumber}. TX: ${existingPayout.transactionHash}. Skipping duplicate payout.`, 'webhook-issue');
+    return;
+  }
+
+  // 8. Distribute Reward
   try {
     log(`Attempting distribution for issue #${issueNumber} to ${contributor.xdcWalletAddress}`, 'webhook-issue');
     // USE REPOSITORY-SPECIFIC issueNumber FOR BLOCKCHAIN CALLS
@@ -1351,6 +1359,32 @@ export async function handleIssueClosed(payload: WebhookPayload, installationId:
       poolManager.id
     );
     log(`Distribution successful for issue #${issueNumber}. TX: ${result?.hash || 'N/A'}`, 'webhook-issue');
+
+    // Record the payout to prevent duplicate processing
+    // Note: This records the POOL bounty payout. The fee breakdown will be calculated by the relayer.
+    // For now, we record base amounts from the blockchain.
+    if (result?.hash && amountStr) {
+      const baseBountyAmount = parseFloat(amountStr);
+      const fees = storage.calculateBountyFees(baseBountyAmount);
+
+      await storage.recordPayout({
+        repositoryGithubId: String(repoId),
+        issueNumber: issueNumber,
+        contributorGithubUsername: closingPRAuthor,
+        contributorUserId: contributor.id,
+        contributorWalletAddress: contributor.xdcWalletAddress,
+        baseBountyAmount: fees.baseBountyAmount.toString(),
+        clientFeeAmount: fees.clientFeeAmount.toString(),
+        contributorFeeAmount: fees.contributorFeeAmount.toString(),
+        totalPlatformFee: fees.totalPlatformFee.toString(),
+        contributorPayout: fees.contributorPayout.toString(),
+        currency: currency,
+        transactionHash: result.hash,
+        poolManagerId: poolManager.id,
+        status: 'completed',
+      });
+      log(`Payout recorded for repo ${repoId} issue #${issueNumber}`, 'webhook-issue');
+    }
   } catch (distributionError: any) {
     log(`Error distributing reward for issue #${issueNumber}: ${distributionError.message}`, 'webhook-issue');
   }

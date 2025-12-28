@@ -132,7 +132,7 @@ router.post(
       }
 
       // Create bounty in database
-      // WHY STATUS pending_payment: User hasn't paid yet
+      // WHY STATUS pending_payment: User hasn't paid yet (set automatically by createCommunityBounty)
       const bounty = await storage.createCommunityBounty({
         githubRepoOwner: validatedData.githubRepoOwner,
         githubRepoName: validatedData.githubRepoName,
@@ -145,9 +145,7 @@ router.post(
         description: validatedData.description,
         amount: validatedData.amount,
         currency: validatedData.currency,
-        expiresAt: validatedData.expiresAt,
-        status: 'pending_payment',
-        paymentStatus: 'pending'
+        expiresAt: validatedData.expiresAt
       });
 
       log(`Community bounty ${bounty.id} created in DB. Status: pending_payment`, 'community-bounties');
@@ -235,26 +233,40 @@ router.post(
       }
 
       // Call blockchain service based on currency
+      // IMPORTANT: We now pass the TOTAL amount client must pay (base + client fee)
+      // The blockchain service will handle the fee breakdown internally
       let result: { tx: any; bountyId: number };
       const expiryTimestamp = bounty.expiresAt ? Math.floor(new Date(bounty.expiresAt).getTime() / 1000) : 0;
+
+      // Use totalPaidByClient (base amount + 2.5% client fee) for escrow
+      const totalAmountToPay = bounty.totalPaidByClient || bounty.amount;
 
       if (bounty.currency === 'XDC') {
         result = await blockchain.createCommunityBountyWithXDC(
           req.user.id,
-          bounty.amount,
-          expiryTimestamp
+          totalAmountToPay,
+          expiryTimestamp,
+          bounty.baseBountyAmount || bounty.amount, // Pass base amount separately
+          bounty.clientFeeAmount || '0',
+          bounty.contributorFeeAmount || '0'
         );
       } else if (bounty.currency === 'ROXN') {
         result = await blockchain.createCommunityBountyWithROXN(
           req.user.id,
-          bounty.amount,
-          expiryTimestamp
+          totalAmountToPay,
+          expiryTimestamp,
+          bounty.baseBountyAmount || bounty.amount,
+          bounty.clientFeeAmount || '0',
+          bounty.contributorFeeAmount || '0'
         );
       } else if (bounty.currency === 'USDC') {
         result = await blockchain.createCommunityBountyWithUSDC(
           req.user.id,
-          bounty.amount,
-          expiryTimestamp
+          totalAmountToPay,
+          expiryTimestamp,
+          bounty.baseBountyAmount || bounty.amount,
+          bounty.clientFeeAmount || '0',
+          bounty.contributorFeeAmount || '0'
         );
       } else {
         throw new BusinessError('Unsupported currency', 400);
@@ -363,15 +375,22 @@ router.post(
         return res.status(400).json({ error: 'Wallet not set up. Please create a wallet first.' });
       }
 
-      // Update bounty status to claimed
-      const updatedBounty = await storage.updateCommunityBounty(bountyId, {
-        status: 'claimed',
-        claimedByUserId: req.user.id,
-        claimedByGithubUsername: user.githubUsername,
-        claimedPrNumber: prNumber,
-        claimedPrUrl: prUrl,
-        claimedAt: new Date()
-      });
+      // CRITICAL-3 FIX: Use atomic claim method to prevent race condition
+      let updatedBounty;
+      try {
+        updatedBounty = await storage.claimCommunityBountyAtomic(
+          bountyId,
+          req.user.id,
+          user.githubUsername,
+          prNumber,
+          prUrl
+        );
+      } catch (claimError: any) {
+        log(`Atomic claim failed for bounty ${bountyId}: ${claimError.message}`, 'community-bounties-ERROR');
+        return res.status(400).json({
+          error: claimError.message || 'Bounty is no longer available for claiming'
+        });
+      }
 
       log(`Community bounty ${bountyId} claimed by ${user.githubUsername} with PR #${prNumber}`, 'community-bounties');
 

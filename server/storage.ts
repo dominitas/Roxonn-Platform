@@ -1,4 +1,4 @@
-import { users, registeredRepositories, bountyRequests, communityBounties } from "../shared/schema";
+import { users, registeredRepositories, bountyRequests, communityBounties, webhookDeliveries, payouts } from "../shared/schema";
 import { eq, and, sql, inArray, desc } from "drizzle-orm";
 import { db } from "./db";
 import session from "express-session";
@@ -829,6 +829,9 @@ export class DatabaseStorage implements IStorage {
     try {
       log(`Creating community bounty for issue #${data.githubIssueNumber} in ${data.githubRepoOwner}/${data.githubRepoName}`, 'storage');
 
+      // Calculate fees for the bounty (5% split fee model)
+      const fees = this.calculateBountyFees(parseFloat(data.amount));
+
       const [bounty] = await db.insert(communityBounties).values({
         githubRepoOwner: data.githubRepoOwner,
         githubRepoName: data.githubRepoName,
@@ -844,6 +847,12 @@ export class DatabaseStorage implements IStorage {
         expiresAt: data.expiresAt || null,
         status: 'pending_payment',
         paymentStatus: 'pending',
+        // Add fee breakdown fields
+        baseBountyAmount: fees.baseBountyAmount.toString(),
+        clientFeeAmount: fees.clientFeeAmount.toString(),
+        contributorFeeAmount: fees.contributorFeeAmount.toString(),
+        totalPlatformFee: fees.totalPlatformFee.toString(),
+        totalPaidByClient: fees.totalPaidByClient.toString(),
       }).returning();
 
       log(`Community bounty created with ID ${bounty.id}`, 'storage');
@@ -1020,6 +1029,7 @@ export class DatabaseStorage implements IStorage {
     escrowTxHash: string;
     escrowBlockNumber: number;
     escrowDepositedAt: Date;
+    blockchainBountyId: number;
     onrampTransactionId: number;
     claimedByUserId: number;
     claimedByGithubUsername: string;
@@ -1113,6 +1123,227 @@ export class DatabaseStorage implements IStorage {
       log(`Error fetching community bounty by onramp transaction: ${error instanceof Error ? error.message : String(error)}`, 'storage');
       return null;
     }
+  }
+
+  // ========================================
+  // CRITICAL-1: Webhook Delivery Idempotency
+  // ========================================
+
+  /**
+   * Record webhook delivery (atomic check-and-insert)
+   * Returns true if this is first time seeing this delivery
+   * Returns false if delivery already processed (duplicate)
+   *
+   * SECURITY: Prevents duplicate webhook processing
+   * USAGE: Call at start of webhook handler, before any processing
+   */
+  async recordWebhookDelivery(
+    deliveryId: string,
+    eventType: string,
+    eventAction: string | null,
+    repositoryId: string | null,
+    installationId: string | null
+  ): Promise<boolean> {
+    try {
+      const result = await db.insert(webhookDeliveries)
+        .values({
+          deliveryId,
+          eventType,
+          eventAction,
+          repositoryId,
+          repositoryName: null,
+          installationId,
+          status: 'processing',
+        })
+        .onConflictDoNothing({ target: webhookDeliveries.deliveryId })
+        .returning({ id: webhookDeliveries.id });
+
+      const isFirstTime = result.length > 0;
+
+      if (!isFirstTime) {
+        log(`Duplicate webhook delivery detected: ${deliveryId}`, 'webhook-idempotency');
+      }
+
+      return isFirstTime;
+    } catch (error) {
+      log(`Error recording webhook delivery: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      return true;
+    }
+  }
+
+  /**
+   * Mark webhook delivery as completed
+   */
+  async markWebhookDeliveryCompleted(deliveryId: string): Promise<void> {
+    try {
+      await db.update(webhookDeliveries)
+        .set({
+          status: 'completed',
+          processedAt: new Date(),
+        })
+        .where(eq(webhookDeliveries.deliveryId, deliveryId));
+    } catch (error) {
+      log(`Error marking webhook delivery completed: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+    }
+  }
+
+  /**
+   * Mark webhook delivery as failed with error
+   */
+  async markWebhookDeliveryFailed(deliveryId: string, errorMessage: string): Promise<void> {
+    try {
+      await db.update(webhookDeliveries)
+        .set({
+          status: 'failed',
+          processedAt: new Date(),
+          errorMessage,
+        })
+        .where(eq(webhookDeliveries.deliveryId, deliveryId));
+    } catch (error) {
+      log(`Error marking webhook delivery failed: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+    }
+  }
+
+  // ========================================
+  // CRITICAL-2: Payout Idempotency
+  // ========================================
+
+  /**
+   * Check if payout already exists for this repo+issue
+   * Returns existing payout if found, null otherwise
+   *
+   * SECURITY: Prevents double payouts
+   * USAGE: Call before blockchain.distributeReward()
+   */
+  async getPayoutByRepoAndIssue(
+    repositoryGithubId: string,
+    issueNumber: number
+  ): Promise<any | null> {
+    try {
+      const [payout] = await db.select()
+        .from(payouts)
+        .where(and(
+          eq(payouts.repositoryGithubId, repositoryGithubId),
+          eq(payouts.issueNumber, issueNumber)
+        ))
+        .limit(1);
+
+      return payout || null;
+    } catch (error) {
+      log(`Error fetching payout: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      return null;
+    }
+  }
+
+  /**
+   * Record completed payout
+   *
+   * SECURITY: Atomic insert with unique constraint
+   * If payout already exists, INSERT will fail (idempotency guarantee)
+   */
+  async recordPayout(payout: any): Promise<any> {
+    try {
+      const [result] = await db.insert(payouts)
+        .values(payout)
+        .returning();
+
+      log(`Payout recorded: repo=${payout.repositoryGithubId}, issue=${payout.issueNumber}, tx=${payout.txHash}`, 'payout');
+      return result;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('unique constraint')) {
+        log(`Payout already exists (idempotency): repo=${payout.repositoryGithubId}, issue=${payout.issueNumber}`, 'payout');
+        throw new Error('Payout already recorded for this issue');
+      }
+      log(`Error recording payout: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      throw error;
+    }
+  }
+
+  // ========================================
+  // CRITICAL-3: Atomic Bounty Claim
+  // ========================================
+
+  /**
+   * Claim bounty atomically with SELECT FOR UPDATE
+   * Prevents race condition where multiple users claim same bounty
+   *
+   * SECURITY: Transaction with row-level lock
+   * Returns updated bounty if claim succeeded
+   * Throws error if bounty not claimable
+   */
+  async claimCommunityBountyAtomic(
+    bountyId: number,
+    userId: number,
+    githubUsername: string,
+    prNumber: number,
+    prUrl: string
+  ): Promise<any> {
+    return await db.transaction(async (tx) => {
+      const [bounty] = await tx.select()
+        .from(communityBounties)
+        .where(eq(communityBounties.id, bountyId))
+        .for('update')
+        .limit(1);
+
+      if (!bounty) {
+        throw new Error('Bounty not found');
+      }
+
+      if (bounty.status !== 'funded') {
+        throw new Error(`Bounty is not claimable (status: ${bounty.status})`);
+      }
+
+      const [updatedBounty] = await tx.update(communityBounties)
+        .set({
+          status: 'claimed',
+          claimedByUserId: userId,
+          claimedByGithubUsername: githubUsername,
+          claimedPrNumber: prNumber,
+          claimedPrUrl: prUrl,
+          claimedAt: new Date(),
+        })
+        .where(eq(communityBounties.id, bountyId))
+        .returning();
+
+      log(`Bounty ${bountyId} claimed atomically by ${githubUsername} via PR #${prNumber}`, 'claim-atomic');
+      return updatedBounty;
+    });
+  }
+
+  // ========================================
+  // Fee Calculation Utilities
+  // ========================================
+
+  /**
+   * Calculate fee breakdown for bounty amount
+   * Returns base amount + all fee components
+   *
+   * Fee Model: 5% total (2.5% client + 2.5% contributor)
+   */
+  calculateBountyFees(baseBountyAmount: number): {
+    baseBountyAmount: number;
+    clientFeeAmount: number;
+    contributorFeeAmount: number;
+    totalPlatformFee: number;
+    totalPaidByClient: number;
+    contributorPayout: number;
+  } {
+    const roundTo8 = (num: number) => Math.round(num * 100000000) / 100000000;
+
+    const clientFee = roundTo8(baseBountyAmount * 0.025);
+    const contributorFee = roundTo8(baseBountyAmount * 0.025);
+    const totalFee = roundTo8(clientFee + contributorFee);
+    const totalPaid = roundTo8(baseBountyAmount + clientFee);
+    const payout = roundTo8(baseBountyAmount - contributorFee);
+
+    return {
+      baseBountyAmount: roundTo8(baseBountyAmount),
+      clientFeeAmount: clientFee,
+      contributorFeeAmount: contributorFee,
+      totalPlatformFee: totalFee,
+      totalPaidByClient: totalPaid,
+      contributorPayout: payout,
+    };
   }
 
 }

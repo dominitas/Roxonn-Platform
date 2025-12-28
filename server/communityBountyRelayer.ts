@@ -144,7 +144,35 @@ async function processClaimedBounty(bountyId: number): Promise<void> {
 
     log(`Bounty ${bountyId} completed on-chain. TX: ${result.txHash}, Block: ${result.blockNumber}`, 'relayer');
 
-    // STEP 5: Update DB with completion details
+    // STEP 5: Record payout for idempotency tracking
+    // WHY: Prevents duplicate payouts in community bounties system
+    // NOTE: This is separate from pool bounty payouts (which are tracked in github.ts)
+    try {
+      const fees = storage.calculateBountyFees(parseFloat(bounty.baseBountyAmount || bounty.amount));
+
+      await storage.recordPayout({
+        repositoryGithubId: `community-${bounty.githubRepoOwner}-${bounty.githubRepoName}`,
+        issueNumber: bounty.githubIssueNumber,
+        contributorGithubUsername: bounty.claimedByGithubUsername!,
+        contributorUserId: bounty.claimedByUserId!,
+        contributorWalletAddress: contributor.xdcWalletAddress,
+        baseBountyAmount: fees.baseBountyAmount.toString(),
+        clientFeeAmount: fees.clientFeeAmount.toString(),
+        contributorFeeAmount: fees.contributorFeeAmount.toString(),
+        totalPlatformFee: fees.totalPlatformFee.toString(),
+        contributorPayout: fees.contributorPayout.toString(),
+        currency: bounty.currency,
+        transactionHash: result.txHash,
+        poolManagerId: null, // Community bounties don't have pool managers
+        status: 'completed',
+      });
+      log(`Payout recorded for community bounty ${bountyId}`, 'relayer');
+    } catch (payoutError: any) {
+      log(`Warning: Failed to record payout for bounty ${bountyId}: ${payoutError.message}`, 'relayer');
+      // Continue even if payout recording fails - the blockchain transaction succeeded
+    }
+
+    // STEP 6: Update DB with completion details
     // WHY: Keep DB in sync with blockchain state
     await storage.updateCommunityBounty(bountyId, {
       status: 'completed',
