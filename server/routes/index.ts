@@ -10,6 +10,7 @@ import authRoutes from './authRoutes';
 import miscRoutes from './miscRoutes';
 import referralRoutes from './referralRoutes';
 import promotionalBountiesRoutes from './promotionalBounties';
+import communityBountiesRoutes from './communityBounties';
 import walletRoutes from './walletRoutes';
 import multiCurrencyWalletRoutes from './multiCurrencyWallet';
 import aiScopingAgentRouter from './aiScopingAgent';
@@ -58,6 +59,9 @@ export function registerModularRoutes(app: Express) {
 
   // Promotional Bounties routes (already modular)
   app.use('/api/promotional', promotionalBountiesRoutes);
+
+  // Community Bounties routes (permissionless bounties on any public repo)
+  app.use('/', communityBountiesRoutes);
 
   // AI Scoping Agent routes (already modular)
   app.use('/api/ai-scoping', aiScopingAgentRouter);

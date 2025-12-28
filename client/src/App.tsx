@@ -32,6 +32,7 @@ import PromotionalBountiesPage from "@/pages/promotional-bounties-page";
 import PromotionalBountiesCreatePage from "@/pages/promotional-bounties-create-page";
 import PromotionalBountiesDetailPage from "@/pages/promotional-bounties-detail-page";
 import PromotionalBountiesReviewPage from "@/pages/promotional-bounties-review-page";
+import CommunityBountiesPage from "@/pages/community-bounties-page";
 import { ContributionDemo } from "@/components/contribution-demo";
 import { ChatWidget } from "@/components/chat-widget";
 import { PoolManagerWelcomeGuide } from "@/components/pool-manager-guide";
@@ -126,6 +127,9 @@ function Router() {
           <Route path="/promotional-bounties/create" component={PromotionalBountiesCreatePage} />
           <Route path="/promotional-bounties/:id" component={PromotionalBountiesDetailPage} />
           <Route path="/promotional-bounties/review" component={PromotionalBountiesReviewPage} />
+
+          {/* Community Bounties */}
+          <Route path="/community-bounties" component={CommunityBountiesPage} />
 
           {/* Dynamic repo route - must come AFTER specific routes */}
           <Route path="/:owner/:repo" component={RepoRoxonnPage} />

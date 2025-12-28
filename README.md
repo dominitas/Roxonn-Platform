@@ -6,7 +6,7 @@
 [![GitHub Issues](https://img.shields.io/github/issues/Roxonn-FutureTech/Roxonn-Platform?style=for-the-badge)](https://github.com/Roxonn-FutureTech/Roxonn-Platform/issues)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-**[Launch App](https://app.roxonn.com)** | **[View Project Board](https://github.com/orgs/Roxonn-FutureTech/projects/17)** | **[Contributing Guide](CONTRIBUTING.md)**
+**[Launch App](https://app.roxonn.com)** | **[View Project Board](https://github.com/orgs/Roxonn-FutureTech/projects/17)** | **[Contributing Guide](CONTRIBUTING.md)** | **[Bot Commands](docs/BOT_COMMANDS.md)** | **[Security Audit](docs/SECURITY_AUDIT_FINDINGS.md)**
 
 ---
 

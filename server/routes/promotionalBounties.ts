@@ -1,6 +1,6 @@
 import { Router, type Request, Response } from 'express';
 import { db, users } from '../db';
-import { requireAuth } from '../auth';
+import { requireAuth, csrfProtection } from '../auth';
 import { eq, and, desc, sql, inArray, or } from 'drizzle-orm';
 import { ZodError } from 'zod';
 import {
@@ -22,6 +22,14 @@ class BusinessError extends Error {
     this.name = 'BusinessError';
   }
 }
+
+const updateBountyRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many bounty update requests, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Rate limiters for promotional bounties endpoints
 const submissionRateLimiter = rateLimit({
@@ -232,7 +240,7 @@ router.get('/bounties/:id', async (req: Request, res: Response) => {
 });
 
 // Create bounty - pool managers only
-router.post('/bounties', requireAuth, createBountyRateLimiter, async (req: Request, res: Response) => {
+router.post('/bounties', requireAuth, csrfProtection, createBountyRateLimiter, async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id;
     
@@ -292,8 +300,10 @@ router.post('/bounties', requireAuth, createBountyRateLimiter, async (req: Reque
   }
 });
 
+
+
 // Update bounty status
-router.patch('/bounties/:id/status', requireAuth, async (req: Request, res: Response) => {
+router.patch('/bounties/:id/status', requireAuth, csrfProtection, updateBountyRateLimiter, async (req: Request, res: Response) => {
   try {
     const bountyId = parseInt(req.params.id, 10);
     if (isNaN(bountyId)) {
@@ -481,7 +491,7 @@ router.get('/submissions/:id', requireAuth, async (req: Request, res: Response) 
 });
 
 // Create submission
-router.post('/submissions', requireAuth, submissionRateLimiter, async (req: Request, res: Response) => {
+router.post('/submissions', requireAuth, csrfProtection, submissionRateLimiter, async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id;
     
@@ -511,7 +521,19 @@ router.post('/submissions', requireAuth, submissionRateLimiter, async (req: Requ
       if (lockedBounty.expires_at && new Date(lockedBounty.expires_at) < new Date()) {
         throw new BusinessError('Bounty has expired', 400);
       }
-      
+      // Check for existing submission from this user
+      const existingSubmission = await tx
+        .select()
+        .from(promotionalSubmissions)
+        .where(and(
+          eq(promotionalSubmissions.bountyId, validatedData.bountyId),
+          eq(promotionalSubmissions.contributorId, userId)
+        ))
+        .limit(1);
+
+      if (existingSubmission.length > 0) {
+        throw new BusinessError('You have already submitted to this bounty', 400);
+      }
       // Check max submissions with locked bounty (within transaction)
       if (lockedBounty.max_submissions) {
         const submissionCountResult = await tx
@@ -550,7 +572,7 @@ router.post('/submissions', requireAuth, submissionRateLimiter, async (req: Requ
 });
 
 // Review submission - pool managers only
-router.patch('/submissions/:id/review', requireAuth, reviewRateLimiter, async (req: Request, res: Response) => {
+router.patch('/submissions/:id/review', requireAuth, csrfProtection, reviewRateLimiter, async (req: Request, res: Response) => {
   try {
     const submissionId = parseInt(req.params.id, 10);
     if (isNaN(submissionId)) {
