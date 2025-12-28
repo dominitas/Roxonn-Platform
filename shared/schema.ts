@@ -647,6 +647,13 @@ export const communityBounties = pgTable("community_bounties", {
   amount: decimal("amount", { precision: 18, scale: 8 }).notNull(),
   currency: text("currency").notNull(), // USDC, XDC, ROXN
 
+  // Fee breakdown (Split fee model: 2.5% client + 2.5% contributor = 5% total)
+  baseBountyAmount: decimal("base_bounty_amount", { precision: 18, scale: 8 }).notNull(),
+  clientFeeAmount: decimal("client_fee_amount", { precision: 18, scale: 8 }).notNull(),
+  contributorFeeAmount: decimal("contributor_fee_amount", { precision: 18, scale: 8 }).notNull(),
+  totalPlatformFee: decimal("total_platform_fee", { precision: 18, scale: 8 }).notNull(),
+  totalPaidByClient: decimal("total_paid_by_client", { precision: 18, scale: 8 }).notNull(),
+
   // Blockchain escrow tracking
   escrowTxHash: text("escrow_tx_hash"),
   escrowBlockNumber: integer("escrow_block_number"),
@@ -698,7 +705,16 @@ export const createCommunityBountySchema = z.object({
   githubIssueUrl: z.string().url(),
   title: z.string().min(1).max(500),
   description: z.string().optional(),
-  amount: z.string().regex(/^\d+(\.\d{1,8})?$/), // Decimal string validation
+  amount: z.string()
+    .regex(/^\d+(\.\d{1,8})?$/, 'Amount must be a valid decimal with up to 8 decimal places')
+    .refine(
+      (val) => parseFloat(val) > 0,
+      { message: 'Amount must be greater than 0' }
+    )
+    .refine(
+      (val) => parseFloat(val) >= 1,
+      { message: 'Minimum bounty amount is 1 USDC/XDC/ROXN' }
+    ),
   currency: z.enum(['USDC', 'XDC', 'ROXN']),
   expiresAt: z.date().optional(),
 });
@@ -725,3 +741,65 @@ export const updateCommunityBountySchema = z.object({
 
 export type CreateCommunityBountyInput = z.infer<typeof createCommunityBountySchema>;
 export type UpdateCommunityBountyInput = z.infer<typeof updateCommunityBountySchema>;
+
+// --- Webhook Deliveries Table (CRITICAL-1: Idempotency) ---
+export const webhookDeliveries = pgTable("webhook_deliveries", {
+  id: serial("id").primaryKey(),
+  deliveryId: text("delivery_id").notNull().unique(),
+  eventType: text("event_type").notNull(),
+  eventAction: text("event_action"),
+  repositoryId: text("repository_id"),
+  repositoryName: text("repository_name"),
+  installationId: text("installation_id"),
+  status: text("status").notNull().default("processing"),
+  receivedAt: timestamp("received_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  processedAt: timestamp("processed_at", { mode: 'date', withTimezone: true }),
+  errorMessage: text("error_message"),
+  metadata: jsonb("metadata").default('{}'),
+});
+
+export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type NewWebhookDelivery = typeof webhookDeliveries.$inferInsert;
+
+// --- Payouts Table (CRITICAL-2: Payout Idempotency) ---
+export const payouts = pgTable("payouts", {
+  id: serial("id").primaryKey(),
+
+  // Unique payout identification
+  repositoryGithubId: text("repository_github_id").notNull(),
+  issueNumber: integer("issue_number").notNull(),
+
+  // Recipient
+  recipientUserId: integer("recipient_user_id").references(() => users.id, { onDelete: 'set null' }),
+  recipientGithubUsername: text("recipient_github_username").notNull(),
+  recipientWalletAddress: text("recipient_wallet_address").notNull(),
+
+  // Payout amounts
+  amount: decimal("amount", { precision: 18, scale: 8 }).notNull(),
+  currency: text("currency").notNull(),
+
+  // Fee breakdown (split fee model)
+  baseBountyAmount: decimal("base_bounty_amount", { precision: 18, scale: 8 }).notNull(),
+  clientFeeAmount: decimal("client_fee_amount", { precision: 18, scale: 8 }).notNull(),
+  contributorFeeAmount: decimal("contributor_fee_amount", { precision: 18, scale: 8 }).notNull(),
+  totalPlatformFee: decimal("total_platform_fee", { precision: 18, scale: 8 }).notNull(),
+
+  // Blockchain transaction
+  txHash: text("tx_hash").notNull(),
+  blockNumber: integer("block_number"),
+  gasUsed: integer("gas_used"),
+
+  // Payout type and source
+  payoutType: text("payout_type").notNull(),
+  poolManagerAddress: text("pool_manager_address"),
+  communityBountyId: integer("community_bounty_id").references(() => communityBounties.id, { onDelete: 'set null' }),
+
+  // Timestamp
+  paidAt: timestamp("paid_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+
+  // Metadata
+  metadata: jsonb("metadata").default('{}'),
+});
+
+export type Payout = typeof payouts.$inferSelect;
+export type NewPayout = typeof payouts.$inferInsert;
