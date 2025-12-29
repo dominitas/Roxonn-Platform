@@ -33,6 +33,7 @@ export interface CommunityBounty {
   escrowTxHash: string | null;
   escrowBlockNumber: number | null;
   escrowDepositedAt: Date | null;
+  blockchainBountyId: number | null;
   paymentMethod: string | null;
   paymentStatus: string;
   onrampTransactionId: number | null;

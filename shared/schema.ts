@@ -658,6 +658,7 @@ export const communityBounties = pgTable("community_bounties", {
   escrowTxHash: text("escrow_tx_hash"),
   escrowBlockNumber: integer("escrow_block_number"),
   escrowDepositedAt: timestamp("escrow_deposited_at", { mode: 'date', withTimezone: true }),
+  blockchainBountyId: integer("blockchain_bounty_id"), // On-chain bounty ID from CommunityBountyEscrow.sol
 
   // Payment tracking (fiat/crypto)
   paymentMethod: text("payment_method"), // 'crypto', 'fiat'
