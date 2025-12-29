@@ -104,9 +104,18 @@ export default function CommunityBountiesPage() {
   // Pay bounty mutation
   const payBountyMutation = useMutation({
     mutationFn: async (bountyId: number) => {
-      return await communityBountiesAPI.pay(bountyId);
+      console.log('[PAYMENT] Starting payment for bounty:', bountyId);
+      try {
+        const result = await communityBountiesAPI.pay(bountyId);
+        console.log('[PAYMENT] Payment successful:', result);
+        return result;
+      } catch (error) {
+        console.error('[PAYMENT] Payment failed:', error);
+        throw error;
+      }
     },
     onSuccess: (data) => {
+      console.log('[PAYMENT] onSuccess called with:', data);
       toast({
         title: "Payment successful!",
         description: `Bounty funded. TX: ${data.txHash.slice(0, 10)}...`,
@@ -114,6 +123,7 @@ export default function CommunityBountiesPage() {
       queryClient.invalidateQueries({ queryKey: ["community-bounties"] });
     },
     onError: (error: any) => {
+      console.error('[PAYMENT] onError called with:', error);
       toast({
         title: "Payment failed",
         description: error.message || "Please try again",
@@ -143,6 +153,7 @@ export default function CommunityBountiesPage() {
       });
     },
     onSuccess: (data) => {
+      console.log('[CREATE] Bounty created successfully:', data);
       toast({
         title: "Bounty created!",
         description: "Proceeding to payment...",
@@ -158,6 +169,7 @@ export default function CommunityBountiesPage() {
         currency: "USDC",
       });
       // Automatically trigger payment
+      console.log('[CREATE] Triggering payment for bounty ID:', data.bounty.id);
       payBountyMutation.mutate(data.bounty.id);
     },
     onError: (error: any) => {
