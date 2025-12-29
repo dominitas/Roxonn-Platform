@@ -306,7 +306,11 @@ const authLimiter = rateLimit({
   max: 200, // Limit each IP to 50 requests per window
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-  message: 'Too many requests from this IP, please try again after 15 minutes',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many requests from this IP, please try again after 15 minutes'
+    });
+  },
   skip: (req) => config.nodeEnv === 'development', // Skip rate limiting in development
   keyGenerator: (req) => req.ip as string, // Use req.ip with 'trust proxy'
 });
@@ -320,7 +324,11 @@ const blockchainLimiter = rateLimit({
   max: 200, // Limit each IP to 20 blockchain requests per window
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many blockchain operations, please try again after 5 minutes',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many blockchain operations, please try again after 5 minutes'
+    });
+  },
   skip: (req) => config.nodeEnv === 'development', // Skip rate limiting in development
   keyGenerator: (req) => req.ip as string, // Use req.ip with 'trust proxy'
 });
@@ -334,7 +342,11 @@ const vscodeLimiter = rateLimit({
   max: 60, // Limit each IP to 60 requests per minute
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many requests from this IP, please try again after 1 minute',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many requests from this IP, please try again after 1 minute'
+    });
+  },
   skip: (req) => config.nodeEnv === 'development', // Skip rate limiting in development
   keyGenerator: (req) => req.ip as string, // Use req.ip with 'trust proxy'
 });
@@ -349,7 +361,11 @@ const nodeLimiter = rateLimit({
   max: 30, // Limit each IP to 30 requests per minute
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many node API requests, please try again after 1 minute',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many node API requests, please try again after 1 minute'
+    });
+  },
   skip: (req) => config.nodeEnv === 'development', // Skip rate limiting in development
   keyGenerator: (req) => req.ip as string, // Use req.ip with 'trust proxy'
 });
@@ -363,7 +379,11 @@ const subscriptionLimiter = rateLimit({
   max: 30, // Limit each IP to 30 requests per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many subscription requests, please try again later',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many subscription requests, please try again later'
+    });
+  },
   skip: (req) => config.nodeEnv === 'development', // Skip rate limiting in development
   keyGenerator: (req) => req.ip as string, // Use req.ip with 'trust proxy'
 });
@@ -377,7 +397,11 @@ const adminLimiter = rateLimit({
   max: 50, // Limit each IP to 50 requests per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many admin requests, please try again later',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many admin requests, please try again later'
+    });
+  },
   skip: (req) => config.nodeEnv === 'development', // Skip rate limiting in development
   keyGenerator: (req) => req.ip as string, // Use req.ip with 'trust proxy'
 });
@@ -391,7 +415,11 @@ const webhookLimiter = rateLimit({
   max: 100, // Limit each IP to 100 requests per minute (webhooks can be bursty)
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many webhook requests, please try again later',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many webhook requests, please try again later'
+    });
+  },
   skip: (req) => config.nodeEnv === 'development', // Skip rate limiting in development
   keyGenerator: (req) => req.ip as string, // Use req.ip with 'trust proxy'
 });
@@ -405,7 +433,11 @@ const staticLimiter = rateLimit({
   max: 300, // Limit each IP to 300 requests per minute for static assets
   standardHeaders: true,
   legacyHeaders: false,
-  message: 'Too many requests, please try again later',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many requests, please try again later'
+    });
+  },
   skip: (req) => {
     // Skip for API routes (they have their own rate limiters)
     if (req.path.startsWith('/api/') || req.path.startsWith('/webhook/') || req.path.startsWith('/vscode/')) {

@@ -26,7 +26,11 @@ class BusinessError extends Error {
 const updateBountyRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  message: 'Too many bounty update requests, please try again later.',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many bounty update requests, please try again later.'
+    });
+  },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -35,7 +39,11 @@ const updateBountyRateLimiter = rateLimit({
 const submissionRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10, // Max 10 submissions per 15 minutes
-  message: 'Too many submission requests, please try again later.',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many submission requests, please try again later.'
+    });
+  },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -43,7 +51,11 @@ const submissionRateLimiter = rateLimit({
 const reviewRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 20, // Max 20 reviews per 15 minutes
-  message: 'Too many review requests, please try again later.',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many review requests, please try again later.'
+    });
+  },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -51,7 +63,11 @@ const reviewRateLimiter = rateLimit({
 const createBountyRateLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 20, // Max 20 bounties per hour
-  message: 'Too many bounty creation requests, please try again later.',
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: 'Too many bounty creation requests, please try again later.'
+    });
+  },
   standardHeaders: true,
   legacyHeaders: false,
 });
