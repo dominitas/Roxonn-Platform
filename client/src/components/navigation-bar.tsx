@@ -206,6 +206,12 @@ export function NavigationBar() {
               </Button>
             </Link>
           )}
+          <Link href="/community-bounties">
+            <Button variant="ghost" className="text-muted-foreground hover:text-cyan-400 hover:bg-cyan-500/10">
+              <Coins className="mr-2 h-5 w-5" />
+              Bounties
+            </Button>
+          </Link>
           <Link href="/leaderboard">
             <Button variant="ghost" className="text-muted-foreground hover:text-cyan-400 hover:bg-cyan-500/10">
               <Trophy className="mr-2 h-5 w-5" />
@@ -406,6 +412,12 @@ export function NavigationBar() {
                         </Button>
                       </Link>
                     )}
+                    <Link href="/community-bounties" className="block">
+                      <Button variant="ghost" className="w-full justify-start h-12 hover:bg-cyan-500/10 hover:text-cyan-400" onClick={() => setMobileMenuOpen(false)}>
+                        <Coins className="mr-2 h-5 w-5" />
+                        Bounties
+                      </Button>
+                    </Link>
                     <Link href="/leaderboard" className="block">
                       <Button variant="ghost" className="w-full justify-start h-12 hover:bg-cyan-500/10 hover:text-cyan-400" onClick={() => setMobileMenuOpen(false)}>
                         <Trophy className="mr-2 h-5 w-5" />
