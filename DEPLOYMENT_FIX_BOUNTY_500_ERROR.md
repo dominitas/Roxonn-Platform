@@ -72,6 +72,101 @@ docker-compose restart
 4. Click "Pay" button
 5. Should work without 500 error
 
+## 🔍 If It STILL Doesn't Work - Send Me These Logs
+
+If the fix doesn't work, I need to see these 3 things:
+
+### 1. Check Database Migration Was Applied
+Run this SQL and send me the result:
+```sql
+-- Check if column exists
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'community_bounties'
+AND column_name = 'blockchain_bounty_id';
+```
+
+**Expected result:** Should show one row with `blockchain_bounty_id | integer`
+**If empty:** The migration didn't run! Need to run Step 2 again.
+
+### 2. Server Error Logs
+When you try to pay for a bounty and it fails, check the server logs immediately.
+
+**Look for lines containing:**
+- `POST /api/community-bounties/`
+- `payment` or `PAYMENT`
+- `Error:` or `500`
+
+**Send me the full error message** - it will look something like:
+```
+[4:23:45 PM] POST /api/community-bounties/32/pay
+Error: column "blockchain_bounty_id" does not exist
+    at ...
+```
+
+**How to see logs:**
+```bash
+# If using PM2:
+pm2 logs --lines 100
+
+# If using systemd:
+journalctl -u roxonn-server -n 100 --follow
+
+# If using docker:
+docker logs -f container-name
+
+# Or check log file directly:
+tail -f /var/log/roxonn/server.log
+```
+
+### 3. Database Query Test
+Run this SQL to verify the table structure:
+```sql
+\d community_bounties
+-- OR
+SELECT * FROM community_bounties LIMIT 1;
+```
+
+**Send me the output** - especially if you see any errors like:
+- `column "blockchain_bounty_id" does not exist`
+- `relation "community_bounties" does not exist`
+
+## Common Issues After Deployment
+
+### Issue: Column still doesn't exist
+**Symptom:** Error says `column "blockchain_bounty_id" does not exist`
+**Fix:** Migration didn't run on the right database. Double-check:
+- You're connected to production database (not dev/local)
+- The SQL command actually executed (no permission errors)
+- Run: `SELECT version FROM migrations WHERE name = '0024_add_blockchain_bounty_id';`
+
+### Issue: Server still running old code
+**Symptom:** No errors in logs, but payment still fails
+**Fix:** Server wasn't restarted properly:
+```bash
+# Kill all node processes
+pkill -9 node
+
+# Restart server
+pm2 start ecosystem.config.js
+# or whatever your startup command is
+```
+
+### Issue: Different error appears
+**Symptom:** Error is NOT about `blockchain_bounty_id`
+**What to do:** Send me the FULL error message from server logs. Could be:
+- Blockchain connection issue (expected, but needs different fix)
+- Permission issue on database
+- Different missing field
+- Network/timeout issue
+
+---
+
+**TL;DR: If it doesn't work, send me:**
+1. Result of `SELECT column_name FROM information_schema.columns WHERE table_name = 'community_bounties' AND column_name = 'blockchain_bounty_id';`
+2. Server logs when payment fails (the error message)
+3. Any other error messages you see
+
 ## What Files Were Changed
 
 ```
