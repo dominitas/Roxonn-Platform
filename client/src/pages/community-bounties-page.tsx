@@ -53,7 +53,7 @@ export default function CommunityBountiesPage() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("funded");
-  const [currencyFilter, setCurrencyFilter] = useState<string>("");
+  const [currencyFilter, setCurrencyFilter] = useState<string>("all");
   const [selectedBounty, setSelectedBounty] = useState<CommunityBounty | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
@@ -61,8 +61,8 @@ export default function CommunityBountiesPage() {
     queryKey: ["community-bounties", statusFilter, currencyFilter],
     queryFn: () =>
       communityBountiesAPI.getAll({
-        status: statusFilter || undefined,
-        currency: currencyFilter || undefined,
+        status: statusFilter === "all" ? undefined : statusFilter || undefined,
+        currency: currencyFilter === "all" ? undefined : currencyFilter || undefined,
         limit: 50,
       }),
   });
@@ -151,10 +151,10 @@ export default function CommunityBountiesPage() {
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-[150px]">
               <Filter className="mr-2 h-4 w-4" />
-              <SelectValue placeholder="Status" />
+              <SelectValue placeholder="All Status" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Status</SelectItem>
+              <SelectItem value="all">All Status</SelectItem>
               <SelectItem value="funded">Funded</SelectItem>
               <SelectItem value="claimed">Claimed</SelectItem>
               <SelectItem value="completed">Completed</SelectItem>
@@ -164,10 +164,10 @@ export default function CommunityBountiesPage() {
           <Select value={currencyFilter} onValueChange={setCurrencyFilter}>
             <SelectTrigger className="w-[150px]">
               <Coins className="mr-2 h-4 w-4" />
-              <SelectValue placeholder="Currency" />
+              <SelectValue placeholder="All Currencies" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Currencies</SelectItem>
+              <SelectItem value="all">All Currencies</SelectItem>
               <SelectItem value="XDC">XDC</SelectItem>
               <SelectItem value="ROXN">ROXN</SelectItem>
               <SelectItem value="USDC">USDC</SelectItem>

@@ -98,7 +98,8 @@ async function main() {
 
     // WHY HIGH GAS LIMIT: Implementation contract is large (many functions + docs)
     const implementationTx = await CommunityBountyEscrowFactory.deploy({
-      gasLimit: 5000000 // 5M gas
+      gasLimit: 5000000, // 5M gas
+      gasPrice: ethers.parseUnits("50", "gwei") // Force 50 gwei for faster confirmation
     });
 
     console.log(`\n⏳ Transaction sent. Waiting for confirmation...`);
@@ -142,7 +143,8 @@ async function main() {
       implementationAddress,
       initData,
       {
-        gasLimit: 2000000 // 2M gas
+        gasLimit: 2000000, // 2M gas
+        gasPrice: ethers.parseUnits("50", "gwei") // Force 50 gwei for faster confirmation
       }
     );
 
