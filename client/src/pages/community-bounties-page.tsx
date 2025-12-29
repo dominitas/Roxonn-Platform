@@ -16,18 +16,20 @@
  */
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { communityBountiesAPI, type CommunityBounty } from "@/lib/community-bounties-api";
-import { Plus, Search, Filter, GitBranch, Coins, Users, ExternalLink, Trophy, Wallet } from "lucide-react";
+import { Plus, Search, Filter, GitBranch, Coins, Users, ExternalLink, Trophy, Wallet, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 
@@ -51,11 +53,21 @@ export default function CommunityBountiesPage() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("funded");
   const [currencyFilter, setCurrencyFilter] = useState<string>("all");
   const [selectedBounty, setSelectedBounty] = useState<CommunityBounty | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+
+  // Create bounty form state
+  const [formData, setFormData] = useState({
+    githubIssueUrl: "",
+    title: "",
+    description: "",
+    amount: "",
+    currency: "USDC" as "XDC" | "ROXN" | "USDC",
+  });
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["community-bounties", statusFilter, currencyFilter],
@@ -77,6 +89,87 @@ export default function CommunityBountiesPage() {
       bounty.githubRepoName.toLowerCase().includes(query)
     );
   }) || [];
+
+  // Parse GitHub issue URL
+  const parseGitHubIssueUrl = (url: string) => {
+    const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+    if (!match) return null;
+    return {
+      owner: match[1],
+      repo: match[2],
+      issueNumber: parseInt(match[3]),
+    };
+  };
+
+  // Create bounty mutation
+  const createBountyMutation = useMutation({
+    mutationFn: async () => {
+      const parsed = parseGitHubIssueUrl(formData.githubIssueUrl);
+      if (!parsed) {
+        throw new Error("Invalid GitHub issue URL");
+      }
+
+      return await communityBountiesAPI.create({
+        githubRepoOwner: parsed.owner,
+        githubRepoName: parsed.repo,
+        githubIssueNumber: parsed.issueNumber,
+        githubIssueId: `${parsed.owner}/${parsed.repo}#${parsed.issueNumber}`,
+        githubIssueUrl: formData.githubIssueUrl,
+        title: formData.title,
+        description: formData.description || undefined,
+        amount: formData.amount,
+        currency: formData.currency,
+      });
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Bounty created!",
+        description: "Proceeding to payment...",
+      });
+      queryClient.invalidateQueries({ queryKey: ["community-bounties"] });
+      setShowCreateDialog(false);
+      // Reset form
+      setFormData({
+        githubIssueUrl: "",
+        title: "",
+        description: "",
+        amount: "",
+        currency: "USDC",
+      });
+      // Navigate to payment or show payment modal
+      // TODO: Implement payment flow
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error creating bounty",
+        description: error.message || "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleCreateBounty = () => {
+    if (!formData.githubIssueUrl || !formData.title || !formData.amount) {
+      toast({
+        title: "Missing fields",
+        description: "Please fill in all required fields",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const parsed = parseGitHubIssueUrl(formData.githubIssueUrl);
+    if (!parsed) {
+      toast({
+        title: "Invalid URL",
+        description: "Please enter a valid GitHub issue URL",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    createBountyMutation.mutate();
+  };
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -382,20 +475,155 @@ export default function CommunityBountiesPage() {
 
       {/* Create Bounty Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create Community Bounty</DialogTitle>
             <DialogDescription>
               Create a bounty on any public GitHub issue. You'll pay after reviewing the details.
             </DialogDescription>
           </DialogHeader>
-          <div className="text-center py-8">
-            <p className="text-muted-foreground">
-              Create bounty form coming soon...
-            </p>
-            <Button className="mt-4" onClick={() => setShowCreateDialog(false)}>
-              Close
-            </Button>
+          <div className="space-y-4 mt-4">
+            <div>
+              <Label htmlFor="githubIssueUrl">
+                GitHub Issue URL <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                id="githubIssueUrl"
+                placeholder="https://github.com/owner/repo/issues/123"
+                value={formData.githubIssueUrl}
+                onChange={(e) =>
+                  setFormData({ ...formData, githubIssueUrl: e.target.value })
+                }
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Paste the full URL of the GitHub issue you want to fund
+              </p>
+            </div>
+
+            <div>
+              <Label htmlFor="title">
+                Bounty Title <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                id="title"
+                placeholder="Fix bug in authentication flow"
+                value={formData.title}
+                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="description">Description (optional)</Label>
+              <Textarea
+                id="description"
+                placeholder="Additional context or requirements..."
+                rows={4}
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="amount">
+                  Amount <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="amount"
+                  type="number"
+                  step="0.01"
+                  min="1"
+                  placeholder="100"
+                  value={formData.amount}
+                  onChange={(e) =>
+                    setFormData({ ...formData, amount: e.target.value })
+                  }
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Minimum: 1 {formData.currency}
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="currency">
+                  Currency <span className="text-red-500">*</span>
+                </Label>
+                <Select
+                  value={formData.currency}
+                  onValueChange={(value: "XDC" | "ROXN" | "USDC") =>
+                    setFormData({ ...formData, currency: value })
+                  }
+                >
+                  <SelectTrigger id="currency">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="USDC">💵 USDC</SelectItem>
+                    <SelectItem value="XDC">💎 XDC</SelectItem>
+                    <SelectItem value="ROXN">🪙 ROXN</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="bg-muted/50 p-4 rounded-lg border border-border/50">
+              <h4 className="font-semibold mb-2 text-sm">Fee Breakdown (5% total)</h4>
+              <div className="space-y-1 text-sm text-muted-foreground">
+                <div className="flex justify-between">
+                  <span>Base bounty:</span>
+                  <span>{formData.amount || "0"} {formData.currency}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Client fee (2.5%):</span>
+                  <span>
+                    +{formData.amount ? (parseFloat(formData.amount) * 0.025).toFixed(2) : "0"}{" "}
+                    {formData.currency}
+                  </span>
+                </div>
+                <div className="flex justify-between font-semibold text-foreground pt-2 border-t border-border/50">
+                  <span>You pay:</span>
+                  <span>
+                    {formData.amount ? (parseFloat(formData.amount) * 1.025).toFixed(2) : "0"}{" "}
+                    {formData.currency}
+                  </span>
+                </div>
+                <p className="text-xs pt-2">
+                  Contributor receives:{" "}
+                  {formData.amount ? (parseFloat(formData.amount) * 0.975).toFixed(2) : "0"}{" "}
+                  {formData.currency} (after 2.5% contributor fee)
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-4">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setShowCreateDialog(false)}
+                disabled={createBountyMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={handleCreateBounty}
+                disabled={createBountyMutation.isPending}
+              >
+                {createBountyMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create Bounty
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
