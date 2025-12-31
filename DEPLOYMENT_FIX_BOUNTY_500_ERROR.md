@@ -154,11 +154,27 @@ pm2 start ecosystem.config.js
 
 ### Issue: Different error appears
 **Symptom:** Error is NOT about `blockchain_bounty_id`
-**What to do:** Send me the FULL error message from server logs. Could be:
-- Blockchain connection issue (expected, but needs different fix)
-- Permission issue on database
-- Different missing field
-- Network/timeout issue
+
+**Possible errors and what they mean:**
+
+**Payment endpoint errors (`POST /api/community-bounties/:id/pay`):**
+- ❌ `Not authenticated` - User session expired, need to re-login
+- ❌ `Invalid bounty ID` - Wrong bounty ID in URL
+- ❌ `Bounty not found` - Bounty doesn't exist in database
+- ❌ `Only bounty creator can pay` - User trying to pay someone else's bounty
+- ❌ `Bounty is not in pending_payment status` - Already paid or claimed
+- ❌ `Unsupported currency` - Currency not XDC/ROXN/USDC
+- ❌ `Failed to process payment` - **This is the 500 error we're fixing**
+
+**Creation endpoint errors (`POST /api/community-bounties`):**
+- ❌ `Not authenticated` - User not logged in
+- ❌ `User wallet not found` - User hasn't set up wallet
+- ❌ `Bounty amount must be greater than 0` - Invalid amount
+- ❌ `Currency must be XDC, ROXN, or USDC` - Invalid currency
+- ❌ `Invalid input` - Validation error (missing fields, wrong types)
+- ❌ `Too many bounty creation requests` - Rate limited (10/hour)
+
+**What to do:** Send me the EXACT error message and which endpoint it's from
 
 ---
 
@@ -166,6 +182,38 @@ pm2 start ecosystem.config.js
 1. Result of `SELECT column_name FROM information_schema.columns WHERE table_name = 'community_bounties' AND column_name = 'blockchain_bounty_id';`
 2. Server logs when payment fails (the error message)
 3. Any other error messages you see
+
+## What the 500 Error Looks Like (Before Fix)
+
+**In browser console:**
+```
+POST https://app.roxonn.com/api/community-bounties/31/pay
+Status: 500 Internal Server Error
+Response: {"error": "Failed to process payment", "details": "column \"blockchain_bounty_id\" does not exist"}
+```
+
+**In server logs:**
+```
+[4:23:45 PM] POST /api/community-bounties/31/pay
+[4:23:45 PM] [community-bounties-ERROR] Error paying community bounty: column "blockchain_bounty_id" does not exist
+Error: column "blockchain_bounty_id" does not exist
+    at Parser.parseErrorMessage (/path/to/postgres.js:...)
+    at ... (line 294 in communityBounties.ts - the blockchainBountyId: result.bountyId line)
+```
+
+**This happens at line 294 in `server/routes/communityBounties.ts`:**
+```typescript
+const updatedBounty = await storage.updateCommunityBounty(bountyId, {
+  status: 'funded',
+  paymentStatus: 'completed',
+  paymentMethod: 'crypto',
+  escrowTxHash: result.tx.hash,
+  escrowDepositedAt: new Date(),
+  blockchainBountyId: result.bountyId  // ← THIS LINE FAILS if column doesn't exist
+});
+```
+
+After the migration runs, this line will work because the `blockchain_bounty_id` column exists in the database.
 
 ## What Files Were Changed
 
