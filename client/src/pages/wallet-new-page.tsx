@@ -780,7 +780,7 @@ export default function WalletNewPage() {
               </div>
               <div>
                 <h3 className="font-semibold">Buy USDC</h3>
-                <p className="text-sm text-muted-foreground">Purchase with INR</p>
+                <p className="text-sm text-muted-foreground">Pay with any fiat currency</p>
               </div>
             </div>
             <Button
@@ -793,10 +793,10 @@ export default function WalletNewPage() {
               ) : (
                 <Plus className="w-4 h-4 mr-2" />
               )}
-              Buy USDC on XDC with INR
+              Buy USDC (Fiat → Crypto)
             </Button>
             <p className="text-xs text-muted-foreground mt-2">
-              Powered by Onramp.money
+              💳 EUR, USD, GBP, INR, or 50+ currencies • Powered by Onramp.money
             </p>
           </div>
 

@@ -229,12 +229,6 @@ export function NavigationBar() {
               Chat
             </Button>
           </Link>
-          <Link href="/courses">
-            <Button variant="ghost" className="text-violet-400 font-semibold flex items-center hover:bg-violet-500/10">
-              <BookOpen className="mr-2 h-5 w-5" />
-              Courses
-            </Button>
-          </Link>
           {user && (
             <Link href="/referrals">
               <Button variant="ghost" className="text-violet-400 font-semibold flex items-center hover:bg-violet-500/10">
@@ -306,12 +300,12 @@ export function NavigationBar() {
           )}
 
           {!user && (
-            <Link href="/membership">
+            <div className="hidden">
               <Button variant="ghost" size="sm" className="mr-2 hover:bg-violet-500/10">
                 <Crown className="h-4 w-4 mr-1 text-violet-400" />
                 <span className="text-violet-400 font-semibold">Premium $10/year</span>
               </Button>
-            </Link>
+            </div>
           )}
 
           {user ? (
@@ -433,12 +427,6 @@ export function NavigationBar() {
                     <Link href="/decentralized-chat" className="block">
                       <Button variant="ghost" className="w-full justify-start h-12 hover:bg-violet-500/10 hover:text-violet-400" onClick={() => setMobileMenuOpen(false)}>
                         Chat
-                      </Button>
-                    </Link>
-                    <Link href="/courses" className="block">
-                      <Button variant="ghost" className="w-full justify-start h-12 text-violet-400 font-semibold flex items-center hover:bg-violet-500/10" onClick={() => setMobileMenuOpen(false)}>
-                        <BookOpen className="mr-2 h-5 w-5" />
-                        Courses
                       </Button>
                     </Link>
                     {user && (
