@@ -371,12 +371,12 @@ export function WalletReceive() {
                         ) : (
                           <>
                             <Plus className="h-4 w-4 mr-2" />
-                            Buy USDC on XDC with INR
+                            Buy USDC (Fiat → Crypto)
                           </>
                         )}
                       </Button>
                       <p className="text-sm text-gray-500 mt-1">
-                        Securely purchase USDC on XDC Network using Indian Rupees (INR) via Onramp.money
+                        💳 Pay with EUR, USD, GBP, INR, or 50+ currencies • ✅ Receive USDC in your Roxonn wallet (XDC Network) • ⚡ Instant via Onramp.money
                       </p>
                       {buyError && (
                         <p className="text-sm text-red-500 mt-1">{buyError}</p>
