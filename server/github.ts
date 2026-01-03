@@ -1441,7 +1441,7 @@ export async function findAppInstallationByName(
  * - Different workflows (pool = instant, community = payment required)
  */
 export interface BountyCommand {
-  type: 'pool_allocate' | 'community_create' | 'community_claim' | 'status' | 'request';
+  type: 'pool_allocate' | 'community_create' | 'community_claim' | 'status' | 'request' | 'attempt';
   amount?: string;
   currency?: 'XDC' | 'ROXN' | 'USDC';
   prNumber?: number; // For claim commands
@@ -1482,6 +1482,16 @@ export function parseBountyCommand(comment: string): BountyCommand | null {
   // Remove quoted text (> ...) as these are usually references/quotes
   // WHY: Prevents bot from responding to quoted comments
   cleanedComment = cleanedComment.replace(/^>\s*.*/gm, '');
+
+  // =========================================================================
+  // PATTERN 0: /attempt (Signal intent to work on issue)
+  // =========================================================================
+  // WHY FIRST: Simple pattern, no arguments needed
+  if (/\/attempt\s*$/i.test(cleanedComment) || /\/attempt\b/i.test(cleanedComment)) {
+    return {
+      type: 'attempt',
+    };
+  }
 
   // =========================================================================
   // PATTERN 1: /claim #<prNumber> (Community bounty claim)
@@ -1708,6 +1718,16 @@ Please wait at least 1 minute between bounty commands on the same issue.
 ---
 <sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`;
     await postGitHubComment(installationId, owner, repo, issueNumber, errorMsg);
+    return;
+  }
+
+  // =========================================================================
+  // COMMAND TYPE: attempt (Signal intent to work on issue)
+  // =========================================================================
+  // WHY: Developers can signal they're working on a bounty
+  // AUTHORIZATION: Anyone can use this command
+  if (command.type === 'attempt') {
+    await handleAttemptCommand(payload, installationId);
     return;
   }
 
@@ -2121,4 +2141,554 @@ Repository maintainers can approve this request:
     await postGitHubComment(installationId, owner, repo, issueNumber, requestMsg);
     log(`Bounty request created by ${commenter} for issue #${issueNumber}`, 'bounty-command');
   }
+}
+
+// =========================================================================
+// WELCOME COMMENT TEMPLATE
+// =========================================================================
+
+/**
+ * Generate the welcome comment posted to every new issue
+ * This comment includes:
+ * - How to create bounties
+ * - How developers can claim bounties
+ * - Commands reference
+ * - Attempt tracker table (updated dynamically)
+ */
+function generateWelcomeComment(): string {
+  return `## 💰 Add a Roxonn Bounty to this Issue
+
+Turn this issue into a paid bounty and attract top developers!
+
+---
+
+### 🚀 How It Works
+
+**For Bounty Creators (Clients):**
+1. **Add bounty**: Comment \`/bounty <amount> <currency>\` (e.g., \`/bounty 100 USDC\`)
+2. **Pay to escrow**: We'll reply with payment link (crypto or fiat)
+3. **Auto-payout**: When PR merges, developer gets paid automatically!
+
+**For Developers (Contributors):**
+1. **Signal intent**: Comment \`/attempt\` to show you're working on it (optional)
+2. **Submit PR**: Create PR with \`fixes #[issue-number]\` in description
+3. **Get paid**: PR merges → Instant payout to your wallet! 💸
+
+---
+
+### ⌨️ Commands
+
+| Command | Who | What it does |
+|---------|-----|--------------|
+| \`/bounty <amount> <currency>\` | Clients | Create bounty (e.g., \`/bounty 50 XDC\`) |
+| \`/attempt\` | Developers | Signal you're working on this |
+| \`@roxonn status\` | Anyone | Check bounty status |
+
+**Supported currencies:** XDC, ROXN, USDC
+
+---
+
+### ❓ FAQ
+
+**Q: How much does it cost?**
+A: 5% total platform fee (2.5% from client, 2.5% from developer). Lowest in the industry!
+
+**Q: When do developers get paid?**
+A: Automatically within 60 seconds after PR merge. No manual claim needed.
+
+**Q: Can I use crypto or fiat?**
+A: Both! Pay with crypto wallet OR credit card via Onramp.money.
+
+**Q: What if multiple people attempt?**
+A: First merged PR wins the bounty. Coordinate in comments to avoid duplicate work.
+
+---
+
+### ✅ Requirements for Valid Submission
+
+- PR must reference this issue: \`fixes #[issue-number]\` in PR description
+- PR must be merged (not just closed)
+- Developer must have XDC wallet linked to Roxonn account
+- Code must meet acceptance criteria listed in issue description
+
+---
+
+### 💡 Tips for Bounty Creators
+
+**Make your bounty attractive:**
+- ✅ Clear description of what needs to be done
+- ✅ Acceptance criteria (how you'll evaluate submissions)
+- ✅ Relevant skills needed (React, Python, etc.)
+- ✅ Links to related files/docs
+- ✅ Fair pricing (check similar bounties at [roxonn.com/explore](https://roxonn.com/explore))
+
+**Suggested bounty amounts:**
+- 🐛 Simple bug fix: 10-50 USDC
+- ✨ Small feature: 50-200 USDC
+- 🚀 Complex feature: 200-1000+ USDC
+
+---
+
+### 📊 Who's Working on This?
+
+| Developer | Started | Status |
+|-----------|---------|--------|
+| _No attempts yet_ | - | - |
+
+---
+
+### 📚 New to Roxonn?
+
+- **Tutorial**: [Getting Started Guide](https://roxonn.com/docs/getting-started)
+- **Install Extension**: [Easy Bounty Creation Tool](https://roxonn.com/extension)
+- **Browse Bounties**: [Explore Active Bounties](https://roxonn.com/explore)
+- **Need Help?**: [Discord](https://discord.gg/roxonn) | [Docs](https://roxonn.com/docs)
+
+---
+
+_Posted by Roxonn Bot • [What is this?](https://roxonn.com/docs/bot)_`;
+}
+
+/**
+ * Format relative time for display
+ */
+function formatTimeAgo(date: Date): string {
+  const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
+
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
+  return `${Math.floor(seconds / 86400)} days ago`;
+}
+
+// =========================================================================
+// ISSUE OPENED HANDLER - Post Welcome Comment
+// =========================================================================
+
+/**
+ * Handler for issues.opened webhook event
+ * Posts the welcome comment to every new issue in repos with Roxonn GitHub App installed
+ */
+export async function handleIssueOpened(
+  payload: any,
+  installationId: string
+): Promise<void> {
+  log(`[handleIssueOpened] Processing new issue`, 'welcome-comment');
+
+  const issue = payload.issue;
+  const repository = payload.repository;
+
+  if (!issue || !repository) {
+    log('Missing required payload fields for issue opened', 'welcome-comment-ERROR');
+    return;
+  }
+
+  const repoFullName = repository.full_name;
+  const issueNumber = issue.number;
+
+  // SSRF Protection
+  const [owner, repo] = (repoFullName || '').split('/');
+  if (!isValidGitHubOwner(owner) || !isValidGitHubRepo(repo)) {
+    log(`Invalid repo format: ${repoFullName}`, 'welcome-comment-ERROR');
+    return;
+  }
+
+  try {
+    // Get installation token
+    const installationToken = await getInstallationAccessToken(installationId);
+    if (!installationToken) {
+      log(`Could not get installation token for welcome comment`, 'welcome-comment-ERROR');
+      return;
+    }
+
+    // Post welcome comment
+    const welcomeBody = generateWelcomeComment();
+    const apiHeaders = getGitHubApiHeaders(installationToken);
+    const commentUrl = buildSafeGitHubUrl('/repos/{owner}/{repo}/issues/{issueNumber}/comments', {
+      owner,
+      repo,
+      issueNumber: String(issueNumber),
+    });
+
+    const response = await axios.post(commentUrl, { body: welcomeBody }, { headers: apiHeaders });
+    const commentId = response.data.id;
+
+    log(`Posted welcome comment on ${owner}/${repo}#${issueNumber}, comment ID: ${commentId}`, 'welcome-comment');
+
+    // Store comment reference for later updates
+    await storage.createIssueComment({
+      githubRepoOwner: owner,
+      githubRepoName: repo,
+      githubIssueNumber: issueNumber,
+      githubCommentId: String(commentId),
+      commentType: 'welcome',
+      installationId,
+    });
+
+    log(`Welcome comment stored for ${owner}/${repo}#${issueNumber}`, 'welcome-comment');
+
+  } catch (error: any) {
+    log(`Error posting welcome comment: ${error.message}`, 'welcome-comment-ERROR');
+    throw error;
+  }
+}
+
+// =========================================================================
+// ATTEMPT COMMAND HANDLER
+// =========================================================================
+
+/**
+ * Handler for /attempt command
+ * Records that a user is working on a bounty and updates the attempt tracker
+ */
+export async function handleAttemptCommand(
+  payload: any,
+  installationId: string
+): Promise<void> {
+  log(`[handleAttemptCommand] Processing /attempt command`, 'attempt');
+
+  const comment = payload.comment;
+  const issue = payload.issue;
+  const repository = payload.repository;
+  const sender = payload.sender;
+
+  if (!comment || !issue || !repository || !sender) {
+    log('Missing required payload fields for attempt command', 'attempt-ERROR');
+    return;
+  }
+
+  const repoFullName = repository.full_name;
+  const issueNumber = issue.number;
+  const commenter = sender.login;
+
+  // SSRF Protection
+  const [owner, repo] = (repoFullName || '').split('/');
+  if (!isValidGitHubOwner(owner) || !isValidGitHubRepo(repo)) {
+    log(`Invalid repo format: ${repoFullName}`, 'attempt-ERROR');
+    return;
+  }
+
+  try {
+    // Check if user is already attempting this issue
+    const existingAttempt = await storage.getActiveAttemptByUserAndIssue(
+      commenter, owner, repo, issueNumber
+    );
+
+    if (existingAttempt) {
+      // User already has an active attempt
+      const timeAgo = formatTimeAgo(existingAttempt.startedAt);
+      await postGitHubComment(installationId, owner, repo, issueNumber,
+        `@${commenter} You're already working on this issue (started ${timeAgo}).
+
+Keep going! 💪 When you're ready, submit a PR with \`fixes #${issueNumber}\` in the description.
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`
+      );
+      return;
+    }
+
+    // Get user from database (optional - attempt works for unregistered users too)
+    const user = await storage.getUserByGithubUsername(commenter);
+
+    // Get bounty for this issue (optional - attempt works before bounty exists)
+    const bounty = await storage.getCommunityBountyByIssue(owner, repo, issueNumber);
+
+    // Create the attempt
+    await storage.createBountyAttempt({
+      bountyId: bounty?.id,
+      userId: user?.id,
+      githubUsername: commenter,
+      githubRepoOwner: owner,
+      githubRepoName: repo,
+      githubIssueNumber: issueNumber,
+    });
+
+    // Post confirmation comment
+    await postGitHubComment(installationId, owner, repo, issueNumber,
+      `👤 @${commenter} is now working on this ${bounty ? 'bounty' : 'issue'}!
+
+**Started:** ${new Date().toUTCString()}
+${bounty ? `**Bounty:** ${bounty.amount} ${bounty.currency}` : ''}
+
+**Next steps:**
+1. Create a Pull Request when ready
+2. Include \`fixes #${issueNumber}\` in PR description
+${bounty ? `3. Bounty will be paid automatically when PR merges!` : '3. Add a bounty to this issue: `/bounty <amount> <currency>`'}
+
+_Other contributors: Please coordinate in comments or work on different issues._
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`
+    );
+
+    // Update the welcome comment's attempt tracker table
+    await updateAttemptTrackerInWelcomeComment(owner, repo, issueNumber, installationId);
+
+    log(`Attempt recorded for ${commenter} on ${owner}/${repo}#${issueNumber}`, 'attempt');
+
+  } catch (error: any) {
+    if (error.message?.includes('already have an active attempt')) {
+      log(`${commenter} already has active attempt on issue #${issueNumber}`, 'attempt');
+      return;
+    }
+    log(`Error handling attempt command: ${error.message}`, 'attempt-ERROR');
+    throw error;
+  }
+}
+
+/**
+ * Update the attempt tracker table in the welcome comment
+ */
+async function updateAttemptTrackerInWelcomeComment(
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  installationId: string
+): Promise<void> {
+  try {
+    // Get the welcome comment reference
+    const welcomeComment = await storage.getWelcomeComment(owner, repo, issueNumber);
+    if (!welcomeComment) {
+      log(`No welcome comment found for ${owner}/${repo}#${issueNumber}`, 'attempt-tracker');
+      return;
+    }
+
+    // Get all active attempts for this issue
+    const attempts = await storage.getActiveAttemptsByIssue(owner, repo, issueNumber);
+
+    // Build the new table rows
+    let tableRows: string;
+    if (attempts.length === 0) {
+      tableRows = '| _No attempts yet_ | - | - |';
+    } else {
+      tableRows = attempts.map(attempt =>
+        `| @${attempt.githubUsername} | ${formatTimeAgo(attempt.startedAt)} | 🔨 Working |`
+      ).join('\n');
+    }
+
+    // Get installation token
+    const installationToken = await getInstallationAccessToken(installationId);
+    if (!installationToken) {
+      log(`Could not get installation token for updating attempt tracker`, 'attempt-tracker-ERROR');
+      return;
+    }
+
+    const apiHeaders = getGitHubApiHeaders(installationToken);
+
+    // Get current comment body
+    const getCommentUrl = buildSafeGitHubUrl('/repos/{owner}/{repo}/issues/comments/{commentId}', {
+      owner,
+      repo,
+      commentId: welcomeComment.githubCommentId,
+    });
+
+    const commentResponse = await axios.get(getCommentUrl, { headers: apiHeaders });
+    const currentBody = commentResponse.data.body;
+
+    // Replace the attempt tracker table in the comment body
+    const tablePattern = /### 📊 Who's Working on This\?\n\n\| Developer \| Started \| Status \|\n\|[-]+\|[-]+\|[-]+\|\n([\s\S]*?)(?=\n---|\n###|$)/;
+    const newTableSection = `### 📊 Who's Working on This?\n\n| Developer | Started | Status |\n|-----------|---------|--------|\n${tableRows}`;
+
+    const updatedBody = currentBody.replace(tablePattern, newTableSection);
+
+    // Update the comment
+    const updateCommentUrl = buildSafeGitHubUrl('/repos/{owner}/{repo}/issues/comments/{commentId}', {
+      owner,
+      repo,
+      commentId: welcomeComment.githubCommentId,
+    });
+
+    await axios.patch(updateCommentUrl, { body: updatedBody }, { headers: apiHeaders });
+
+    log(`Updated attempt tracker for ${owner}/${repo}#${issueNumber}`, 'attempt-tracker');
+
+  } catch (error: any) {
+    log(`Error updating attempt tracker: ${error.message}`, 'attempt-tracker-ERROR');
+    // Don't throw - this is a non-critical update
+  }
+}
+
+// =========================================================================
+// AUTO-PAYOUT ON PR MERGE HANDLER
+// =========================================================================
+
+/**
+ * Handler for pull_request.closed (merged=true) webhook event
+ * Automatically pays out community bounties when PR is merged
+ */
+export async function handlePullRequestMergedForAutoPayout(
+  payload: any,
+  installationId: string
+): Promise<void> {
+  log(`[handlePullRequestMergedForAutoPayout] Processing merged PR`, 'auto-payout');
+
+  const pr = payload.pull_request;
+  const repository = payload.repository;
+
+  if (!pr || !pr.merged || !repository) {
+    log('PR not merged or missing required fields', 'auto-payout');
+    return;
+  }
+
+  const repoFullName = repository.full_name;
+  const prNumber = pr.number;
+  const prAuthor = pr.user?.login;
+  const prBody = pr.body || '';
+  const prUrl = pr.html_url;
+
+  // SSRF Protection
+  const [owner, repo] = (repoFullName || '').split('/');
+  if (!isValidGitHubOwner(owner) || !isValidGitHubRepo(repo)) {
+    log(`Invalid repo format: ${repoFullName}`, 'auto-payout-ERROR');
+    return;
+  }
+
+  log(`Processing merged PR #${prNumber} by ${prAuthor} in ${owner}/${repo}`, 'auto-payout');
+
+  // Extract issue numbers from PR body
+  const issueNumbers = extractIssueNumbers(prBody);
+  if (issueNumbers.length === 0) {
+    log(`No issue numbers found in PR #${prNumber} body`, 'auto-payout');
+    return;
+  }
+
+  log(`Found linked issues: ${issueNumbers.join(', ')}`, 'auto-payout');
+
+  // Process each linked issue
+  for (const issueNumber of issueNumbers) {
+    try {
+      // Check for community bounty on this issue
+      const bounty = await storage.getCommunityBountyByIssue(owner, repo, issueNumber);
+
+      if (!bounty) {
+        log(`No community bounty for issue #${issueNumber}`, 'auto-payout');
+        continue;
+      }
+
+      if (bounty.status !== 'funded') {
+        log(`Bounty for issue #${issueNumber} is ${bounty.status}, not funded`, 'auto-payout');
+        continue;
+      }
+
+      log(`Found funded bounty: ${bounty.amount} ${bounty.currency} for issue #${issueNumber}`, 'auto-payout');
+
+      // Get the contributor (PR author)
+      const contributor = await storage.getUserByGithubUsername(prAuthor);
+
+      if (!contributor) {
+        // Post comment asking user to sign up
+        await postGitHubComment(installationId, owner, repo, issueNumber,
+          `⚠️ **Bounty Payout Pending**
+
+@${prAuthor} Your PR #${prNumber} was merged! 🎉
+
+However, you need to sign up on Roxonn to receive the bounty payment.
+
+**Steps to claim your bounty:**
+1. Go to [roxonn.com](https://roxonn.com) and sign up with GitHub
+2. Connect or create an XDC wallet in settings
+3. Your bounty will be sent automatically!
+
+**Bounty:** ${bounty.amount} ${bounty.currency}
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`
+        );
+
+        // Mark bounty as pending claim
+        await storage.updateCommunityBounty(bounty.id, {
+          status: 'claimed',
+          claimedByGithubUsername: prAuthor,
+          claimedPrNumber: prNumber,
+          claimedPrUrl: prUrl,
+          claimedAt: new Date(),
+        });
+
+        log(`Bounty for issue #${issueNumber} pending - contributor ${prAuthor} not registered`, 'auto-payout');
+        continue;
+      }
+
+      if (!contributor.xdcWalletAddress) {
+        // Post comment asking user to add wallet
+        await postGitHubComment(installationId, owner, repo, issueNumber,
+          `⚠️ **Bounty Payout Pending**
+
+@${prAuthor} Your PR #${prNumber} was merged! 🎉
+
+However, you need to connect an XDC wallet to receive the bounty payment.
+
+**Steps to claim your bounty:**
+1. Go to [roxonn.com/settings/wallet](https://roxonn.com/settings/wallet)
+2. Connect or create an XDC wallet
+3. Your bounty will be sent automatically!
+
+**Bounty:** ${bounty.amount} ${bounty.currency}
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`
+        );
+
+        // Mark bounty as pending claim
+        await storage.updateCommunityBounty(bounty.id, {
+          status: 'claimed',
+          claimedByUserId: contributor.id,
+          claimedByGithubUsername: prAuthor,
+          claimedPrNumber: prNumber,
+          claimedPrUrl: prUrl,
+          claimedAt: new Date(),
+        });
+
+        log(`Bounty for issue #${issueNumber} pending - contributor ${prAuthor} has no wallet`, 'auto-payout');
+        continue;
+      }
+
+      // Execute the payout via relayer (mark as claimed, relayer will complete)
+      // Using atomic claim to prevent race conditions
+      try {
+        await storage.claimCommunityBountyAtomic(
+          bounty.id,
+          contributor.id,
+          prAuthor,
+          prNumber,
+          prUrl
+        );
+
+        log(`Bounty ${bounty.id} claimed atomically, relayer will complete payout`, 'auto-payout');
+
+        // Post success comment (payout will be completed by relayer)
+        await postGitHubComment(installationId, owner, repo, issueNumber,
+          `✅ **Bounty Claimed Successfully!**
+
+@${prAuthor} Your PR #${prNumber} was merged and bounty claim is being processed! 🎉
+
+**Payout Details:**
+- **Bounty:** ${bounty.amount} ${bounty.currency}
+- **Net Payout:** ${(parseFloat(bounty.amount) * 0.975).toFixed(4)} ${bounty.currency} (2.5% platform fee)
+- **Recipient:** \`${contributor.xdcWalletAddress.slice(0, 10)}...${contributor.xdcWalletAddress.slice(-6)}\`
+
+⏳ Payout will be processed within 60 seconds by our relayer.
+
+---
+<sub>Powered by [Roxonn](https://app.roxonn.com)</sub>`
+        );
+
+        // Update attempt status to completed
+        await storage.completeAttemptByPR(prAuthor, owner, repo, issueNumber, prNumber, prUrl);
+
+      } catch (claimError: any) {
+        if (claimError.message?.includes('not claimable')) {
+          log(`Bounty ${bounty.id} already claimed or not claimable`, 'auto-payout');
+        } else {
+          throw claimError;
+        }
+      }
+
+    } catch (error: any) {
+      log(`Error processing auto-payout for issue #${issueNumber}: ${error.message}`, 'auto-payout-ERROR');
+      // Continue to next issue
+    }
+  }
+
+  log(`Finished processing auto-payout for PR #${prNumber}`, 'auto-payout');
 }

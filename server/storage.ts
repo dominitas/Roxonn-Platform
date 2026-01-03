@@ -1,4 +1,4 @@
-import { users, registeredRepositories, bountyRequests, communityBounties, webhookDeliveries, payouts } from "../shared/schema";
+import { users, registeredRepositories, bountyRequests, communityBounties, webhookDeliveries, payouts, bountyAttempts, issueComments } from "../shared/schema";
 import { eq, and, sql, inArray, desc } from "drizzle-orm";
 import { db } from "./db";
 import session from "express-session";
@@ -1344,6 +1344,272 @@ export class DatabaseStorage implements IStorage {
       totalPaidByClient: totalPaid,
       contributorPayout: payout,
     };
+  }
+
+  // ========================================
+  // Bounty Attempts (Track who's working on issues)
+  // ========================================
+
+  /**
+   * Create a new bounty attempt (when user comments /attempt)
+   */
+  async createBountyAttempt(attempt: {
+    bountyId?: number;
+    userId?: number;
+    githubUsername: string;
+    githubRepoOwner: string;
+    githubRepoName: string;
+    githubIssueNumber: number;
+  }): Promise<any> {
+    try {
+      const [result] = await db.insert(bountyAttempts)
+        .values({
+          bountyId: attempt.bountyId || null,
+          userId: attempt.userId || null,
+          githubUsername: attempt.githubUsername,
+          githubRepoOwner: attempt.githubRepoOwner,
+          githubRepoName: attempt.githubRepoName,
+          githubIssueNumber: attempt.githubIssueNumber,
+          status: 'active',
+          startedAt: new Date(),
+        })
+        .returning();
+
+      log(`Bounty attempt created: ${attempt.githubUsername} on ${attempt.githubRepoOwner}/${attempt.githubRepoName}#${attempt.githubIssueNumber}`, 'attempt');
+      return result;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('unique')) {
+        log(`Attempt already exists for ${attempt.githubUsername} on issue #${attempt.githubIssueNumber}`, 'attempt');
+        throw new Error('You already have an active attempt on this issue');
+      }
+      log(`Error creating bounty attempt: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      throw error;
+    }
+  }
+
+  /**
+   * Get active attempt by user and issue
+   */
+  async getActiveAttemptByUserAndIssue(
+    githubUsername: string,
+    githubRepoOwner: string,
+    githubRepoName: string,
+    githubIssueNumber: number
+  ): Promise<any | null> {
+    try {
+      const [attempt] = await db.select()
+        .from(bountyAttempts)
+        .where(and(
+          eq(bountyAttempts.githubUsername, githubUsername),
+          eq(bountyAttempts.githubRepoOwner, githubRepoOwner),
+          eq(bountyAttempts.githubRepoName, githubRepoName),
+          eq(bountyAttempts.githubIssueNumber, githubIssueNumber),
+          eq(bountyAttempts.status, 'active')
+        ))
+        .limit(1);
+
+      return attempt || null;
+    } catch (error) {
+      log(`Error fetching active attempt: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      return null;
+    }
+  }
+
+  /**
+   * Get all active attempts for an issue
+   */
+  async getActiveAttemptsByIssue(
+    githubRepoOwner: string,
+    githubRepoName: string,
+    githubIssueNumber: number
+  ): Promise<any[]> {
+    try {
+      const attempts = await db.select()
+        .from(bountyAttempts)
+        .where(and(
+          eq(bountyAttempts.githubRepoOwner, githubRepoOwner),
+          eq(bountyAttempts.githubRepoName, githubRepoName),
+          eq(bountyAttempts.githubIssueNumber, githubIssueNumber),
+          eq(bountyAttempts.status, 'active')
+        ))
+        .orderBy(bountyAttempts.startedAt);
+
+      return attempts;
+    } catch (error) {
+      log(`Error fetching active attempts: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      return [];
+    }
+  }
+
+  /**
+   * Update attempt status (completed when PR merged, abandoned when user gives up)
+   */
+  async updateBountyAttemptStatus(
+    attemptId: number,
+    status: 'active' | 'completed' | 'abandoned',
+    prNumber?: number,
+    prUrl?: string
+  ): Promise<any> {
+    try {
+      const [updated] = await db.update(bountyAttempts)
+        .set({
+          status,
+          prNumber: prNumber || null,
+          prUrl: prUrl || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(bountyAttempts.id, attemptId))
+        .returning();
+
+      log(`Bounty attempt ${attemptId} updated to ${status}`, 'attempt');
+      return updated;
+    } catch (error) {
+      log(`Error updating bounty attempt: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      throw error;
+    }
+  }
+
+  /**
+   * Mark attempt as completed when PR merges
+   */
+  async completeAttemptByPR(
+    githubUsername: string,
+    githubRepoOwner: string,
+    githubRepoName: string,
+    githubIssueNumber: number,
+    prNumber: number,
+    prUrl: string
+  ): Promise<any | null> {
+    try {
+      const [updated] = await db.update(bountyAttempts)
+        .set({
+          status: 'completed',
+          prNumber,
+          prUrl,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(bountyAttempts.githubUsername, githubUsername),
+          eq(bountyAttempts.githubRepoOwner, githubRepoOwner),
+          eq(bountyAttempts.githubRepoName, githubRepoName),
+          eq(bountyAttempts.githubIssueNumber, githubIssueNumber),
+          eq(bountyAttempts.status, 'active')
+        ))
+        .returning();
+
+      if (updated) {
+        log(`Attempt completed for ${githubUsername} via PR #${prNumber}`, 'attempt');
+      }
+      return updated || null;
+    } catch (error) {
+      log(`Error completing attempt: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      return null;
+    }
+  }
+
+  // ========================================
+  // Issue Comments (Track bot comments for updates)
+  // ========================================
+
+  /**
+   * Store a comment reference for later updates
+   */
+  async createIssueComment(comment: {
+    githubRepoOwner: string;
+    githubRepoName: string;
+    githubIssueNumber: number;
+    githubCommentId: string;
+    commentType: 'welcome' | 'status' | 'payout';
+    installationId: string;
+  }): Promise<any> {
+    try {
+      const [result] = await db.insert(issueComments)
+        .values({
+          githubRepoOwner: comment.githubRepoOwner,
+          githubRepoName: comment.githubRepoName,
+          githubIssueNumber: comment.githubIssueNumber,
+          githubCommentId: comment.githubCommentId,
+          commentType: comment.commentType,
+          installationId: comment.installationId,
+        })
+        .returning();
+
+      log(`Issue comment stored: ${comment.commentType} on ${comment.githubRepoOwner}/${comment.githubRepoName}#${comment.githubIssueNumber}`, 'comment');
+      return result;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('unique')) {
+        log(`Comment of type ${comment.commentType} already exists for issue #${comment.githubIssueNumber}`, 'comment');
+        // Update existing comment reference
+        const [updated] = await db.update(issueComments)
+          .set({
+            githubCommentId: comment.githubCommentId,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(issueComments.githubRepoOwner, comment.githubRepoOwner),
+            eq(issueComments.githubRepoName, comment.githubRepoName),
+            eq(issueComments.githubIssueNumber, comment.githubIssueNumber),
+            eq(issueComments.commentType, comment.commentType)
+          ))
+          .returning();
+        return updated;
+      }
+      log(`Error creating issue comment: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      throw error;
+    }
+  }
+
+  /**
+   * Get welcome comment for an issue (used to update attempt tracker)
+   */
+  async getWelcomeComment(
+    githubRepoOwner: string,
+    githubRepoName: string,
+    githubIssueNumber: number
+  ): Promise<any | null> {
+    try {
+      const [comment] = await db.select()
+        .from(issueComments)
+        .where(and(
+          eq(issueComments.githubRepoOwner, githubRepoOwner),
+          eq(issueComments.githubRepoName, githubRepoName),
+          eq(issueComments.githubIssueNumber, githubIssueNumber),
+          eq(issueComments.commentType, 'welcome')
+        ))
+        .limit(1);
+
+      return comment || null;
+    } catch (error) {
+      log(`Error fetching welcome comment: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      return null;
+    }
+  }
+
+  /**
+   * Get comment by type for an issue
+   */
+  async getIssueCommentByType(
+    githubRepoOwner: string,
+    githubRepoName: string,
+    githubIssueNumber: number,
+    commentType: 'welcome' | 'status' | 'payout'
+  ): Promise<any | null> {
+    try {
+      const [comment] = await db.select()
+        .from(issueComments)
+        .where(and(
+          eq(issueComments.githubRepoOwner, githubRepoOwner),
+          eq(issueComments.githubRepoName, githubRepoName),
+          eq(issueComments.githubIssueNumber, githubIssueNumber),
+          eq(issueComments.commentType, commentType)
+        ))
+        .limit(1);
+
+      return comment || null;
+    } catch (error) {
+      log(`Error fetching issue comment: ${error instanceof Error ? error.message : String(error)}`, 'storage-ERROR');
+      return null;
+    }
   }
 
 }

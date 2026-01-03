@@ -804,3 +804,76 @@ export const payouts = pgTable("payouts", {
 
 export type Payout = typeof payouts.$inferSelect;
 export type NewPayout = typeof payouts.$inferInsert;
+
+// --- Bounty Attempts Table (Track who's working on bounties) ---
+/*
+ * WHY THIS TABLE:
+ * - Track developers who use /attempt command to signal they're working on an issue
+ * - Display "Who's Working on This?" section in GitHub comments
+ * - Help prevent duplicate work by showing active attempts
+ * - Track attempt status (active, completed, abandoned)
+ */
+export const bountyAttempts = pgTable("bounty_attempts", {
+  id: serial("id").primaryKey(),
+
+  // Bounty reference (nullable - attempts can exist before bounty is created)
+  bountyId: integer("bounty_id").references(() => communityBounties.id, { onDelete: 'cascade' }),
+
+  // User reference (nullable - for unregistered users we store github_username only)
+  userId: integer("user_id").references(() => users.id, { onDelete: 'set null' }),
+
+  // GitHub identifiers (stored separately for display even if user is deleted)
+  githubUsername: text("github_username").notNull(),
+  githubRepoOwner: text("github_repo_owner").notNull(),
+  githubRepoName: text("github_repo_name").notNull(),
+  githubIssueNumber: integer("github_issue_number").notNull(),
+
+  // Timing
+  startedAt: timestamp("started_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+
+  // Status: active (working), completed (PR merged), abandoned (gave up/inactive)
+  status: text("status", { enum: ["active", "completed", "abandoned"] }).default("active").notNull(),
+
+  // PR tracking (set when PR is created/merged)
+  prNumber: integer("pr_number"),
+  prUrl: text("pr_url"),
+
+  // Timestamps
+  createdAt: timestamp("created_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+});
+
+export type BountyAttempt = typeof bountyAttempts.$inferSelect;
+export type NewBountyAttempt = typeof bountyAttempts.$inferInsert;
+
+// --- Issue Comments Table (Store bot comment IDs for updates) ---
+/*
+ * WHY THIS TABLE:
+ * - Store GitHub comment IDs for welcome comments posted by the bot
+ * - Allow updating the "Who's Working on This?" table in welcome comments
+ * - Track different comment types (welcome, status, payout)
+ */
+export const issueComments = pgTable("issue_comments", {
+  id: serial("id").primaryKey(),
+
+  // GitHub identifiers
+  githubRepoOwner: text("github_repo_owner").notNull(),
+  githubRepoName: text("github_repo_name").notNull(),
+  githubIssueNumber: integer("github_issue_number").notNull(),
+
+  // GitHub comment reference
+  githubCommentId: text("github_comment_id").notNull(), // Using text for bigint compatibility
+
+  // Comment type for different bot comments
+  commentType: text("comment_type", { enum: ["welcome", "status", "payout"] }).notNull(),
+
+  // Installation ID for GitHub API calls
+  installationId: text("installation_id").notNull(),
+
+  // Timestamps
+  createdAt: timestamp("created_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+});
+
+export type IssueComment = typeof issueComments.$inferSelect;
+export type NewIssueComment = typeof issueComments.$inferInsert;

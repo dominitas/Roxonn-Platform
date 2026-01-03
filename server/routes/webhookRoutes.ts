@@ -12,6 +12,9 @@ import {
   parseBountyCommand,
   handleBountyCommand,
   handleIssueClosed,
+  handleIssueOpened,
+  handleAttemptCommand,
+  handlePullRequestMergedForAutoPayout,
 } from '../github';
 
 const router = Router();
@@ -78,6 +81,19 @@ async function handleGitHubAppWebhook(req: Request, res: Response) {
       await storage.markWebhookDeliveryCompleted(delivery);
       return res.status(200).json({ message: 'Installation event processed.' });
 
+      // --- Handle Issue Opened - Post Welcome Comment ---
+    } else if (event === 'issues' && payload.action === 'opened') {
+      log(`Processing new issue opened: #${payload.issue?.number} in ${payload.repository?.full_name}`, 'webhook-app');
+      setImmediate(() => {
+        handleIssueOpened(payload, installationId)
+          .then(() => storage.markWebhookDeliveryCompleted(delivery))
+          .catch(err => {
+            log(`Error posting welcome comment: ${err?.message || err}`, 'webhook-app');
+            storage.markWebhookDeliveryFailed(delivery, err?.message || String(err));
+          });
+      });
+      return res.status(202).json({ message: 'Issue opened processing initiated.' });
+
       // --- Handle Issue Comment for Bounty Commands ---
     } else if (event === 'issue_comment' && payload.action === 'created') {
       const commentBody = payload.comment?.body || '';
@@ -111,6 +127,19 @@ async function handleGitHubAppWebhook(req: Request, res: Response) {
           });
       });
       return res.status(202).json({ message: 'Webhook received and Issue Closed processing initiated.' });
+
+      // --- Handle Pull Request Merged for Auto-Payout ---
+    } else if (event === 'pull_request' && payload.action === 'closed' && payload.pull_request?.merged === true) {
+      log(`Processing merged PR #${payload.pull_request?.number} in ${payload.repository?.full_name}`, 'webhook-app');
+      setImmediate(() => {
+        handlePullRequestMergedForAutoPayout(payload, installationId)
+          .then(() => storage.markWebhookDeliveryCompleted(delivery))
+          .catch(err => {
+            log(`Error in PR merge auto-payout handler: ${err?.message || err}`, 'webhook-app');
+            storage.markWebhookDeliveryFailed(delivery, err?.message || String(err));
+          });
+      });
+      return res.status(202).json({ message: 'PR merge auto-payout processing initiated.' });
 
       // --- Handle Repository Visibility Changes ---
     } else if (event === 'repository' && (payload.action === 'privatized' || payload.action === 'publicized')) {

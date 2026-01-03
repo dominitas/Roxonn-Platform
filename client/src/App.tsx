@@ -33,10 +33,13 @@ import PromotionalBountiesCreatePage from "@/pages/promotional-bounties-create-p
 import PromotionalBountiesDetailPage from "@/pages/promotional-bounties-detail-page";
 import PromotionalBountiesReviewPage from "@/pages/promotional-bounties-review-page";
 import CommunityBountiesPage from "@/pages/community-bounties-page";
+import { CommandsReferencePage } from "@/pages/commands-reference-page";
 import { ContributionDemo } from "@/components/contribution-demo";
 import { ChatWidget } from "@/components/chat-widget";
 import { PoolManagerWelcomeGuide } from "@/components/pool-manager-guide";
 import { FundingDemo } from "@/components/funding-demo";
+import { ClientOnboarding } from "@/components/client-onboarding";
+import { DeveloperOnboarding } from "@/components/developer-onboarding";
 import { MyRepositories } from "@/components/my-repositories";
 import { Loader2 } from "lucide-react";
 
@@ -65,8 +68,10 @@ function Router() {
           <>
             {/* Show appropriate guide based on user role */}
             {user?.role === "contributor" && <ContributionDemo />}
+            {user?.role === "contributor" && <DeveloperOnboarding />}
             {user?.role === "poolmanager" && <PoolManagerWelcomeGuide />}
             {user?.role === "poolmanager" && <FundingDemo />}
+            {user?.role === "poolmanager" && <ClientOnboarding />}
           </>
         )}
         <Switch>
@@ -116,6 +121,7 @@ function Router() {
           <Route path="/decentralized-chat" component={DecentralizedChatPage} />
           <Route path="/ai-scoping-agent" component={AiScopingAgentPage} />
           <Route path="/faq" component={FAQPage} />
+          <Route path="/commands" component={CommandsReferencePage} />
 
           {/* Courses */}
           <Route path="/courses" component={CoursesPage} />

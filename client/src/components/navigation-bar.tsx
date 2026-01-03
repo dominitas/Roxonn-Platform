@@ -22,6 +22,8 @@ import { showContributionDemo } from "@/components/contribution-demo";
 import { showReposWelcomeGuide } from "@/components/welcome-guide";
 import { showPoolManagerGuide } from "@/components/pool-manager-guide";
 import { showFundingDemo } from "@/components/funding-demo";
+import { showClientOnboarding } from "@/components/client-onboarding";
+import { showDeveloperOnboarding } from "@/components/developer-onboarding";
 import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useState } from "react";
@@ -157,6 +159,31 @@ export function NavigationBar() {
             <DropdownMenuContent align="end" className="w-56 bg-background/95 backdrop-blur-xl border-border/50">
               <DropdownMenuLabel className="text-muted-foreground">Help & Guides</DropdownMenuLabel>
               <DropdownMenuSeparator className="bg-border/50" />
+
+              {/* Getting Started Tutorial - role specific */}
+              {isDeveloper(user) && (
+                <DropdownMenuItem onClick={() => showDeveloperOnboarding()} className="cursor-pointer hover:bg-cyan-500/10 hover:text-cyan-400 focus:bg-cyan-500/10 focus:text-cyan-400">
+                  <BookOpen className="mr-2 h-4 w-4" />
+                  Getting Started Tutorial
+                </DropdownMenuItem>
+              )}
+              {isClient(user) && (
+                <DropdownMenuItem onClick={() => showClientOnboarding()} className="cursor-pointer hover:bg-cyan-500/10 hover:text-cyan-400 focus:bg-cyan-500/10 focus:text-cyan-400">
+                  <BookOpen className="mr-2 h-4 w-4" />
+                  Getting Started Tutorial
+                </DropdownMenuItem>
+              )}
+
+              {/* Commands Reference */}
+              <DropdownMenuItem asChild>
+                <Link to="/commands" className="w-full cursor-pointer hover:bg-cyan-500/10 hover:text-cyan-400 focus:bg-cyan-500/10 focus:text-cyan-400">
+                  <Code className="mr-2 h-4 w-4" />
+                  Commands Reference
+                </Link>
+              </DropdownMenuItem>
+
+              <DropdownMenuSeparator className="bg-border/50" />
+
               {/* Show different demos based on profile type (Developer vs Client) */}
               {isDeveloper(user) && (
                 <DropdownMenuItem onClick={() => showContributionDemo()} className="cursor-pointer hover:bg-cyan-500/10 hover:text-cyan-400 focus:bg-cyan-500/10 focus:text-cyan-400">
@@ -183,6 +210,16 @@ export function NavigationBar() {
                   <HelpCircle className="mr-2 h-4 w-4" />
                   FAQs
                 </Link>
+              </DropdownMenuItem>
+
+              <DropdownMenuSeparator className="bg-border/50" />
+
+              {/* External links */}
+              <DropdownMenuItem asChild>
+                <a href="https://discord.gg/roxonn" target="_blank" rel="noopener noreferrer" className="w-full cursor-pointer hover:bg-cyan-500/10 hover:text-cyan-400 focus:bg-cyan-500/10 focus:text-cyan-400">
+                  <AlertCircle className="mr-2 h-4 w-4" />
+                  Discord Support
+                </a>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
