@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { config } from './config';
 import { blockchain } from './blockchain';
 import { storage } from './storage';
-import { log } from './utils';
+import { log, sanitizeUserInput, sanitizeGitHubIssue } from './utils';
 import { Webhooks } from "@octokit/webhooks";
 import { ethers } from 'ethers';
 // Import Octokit App Auth
@@ -1857,6 +1857,9 @@ ${existingBounty.status === 'funded' ? 'This bounty is active and ready to claim
       log(`Could not find user ${commenter}, creating bounty without user ID`, 'bounty-command');
     }
 
+    // CRITICAL-5 FIX: Sanitize issue data before storing
+    const sanitizedIssue = sanitizeGitHubIssue(issue);
+
     // Create pending bounty in database
     try {
       const bounty = await storage.createCommunityBounty({
@@ -1867,8 +1870,8 @@ ${existingBounty.status === 'funded' ? 'This bounty is active and ready to claim
         githubIssueUrl: issueUrl,
         creatorUserId,
         createdByGithubUsername: commenter,
-        title: issue.title || `Issue #${issueNumber}`,
-        description: issue.body?.substring(0, 500),
+        title: sanitizedIssue.title || `Issue #${issueNumber}`,
+        description: sanitizedIssue.body?.substring(0, 500) || null,
         amount: command.amount,
         currency: command.currency,
       });

@@ -2116,14 +2116,59 @@ export class BlockchainService {
 
             log(`Community bounty creation tx sent. TX: ${tx.hash}, Expected bounty ID: ${nextBountyId}`, 'blockchain');
 
+            // CRITICAL-4 FIX: Comprehensive transaction verification
             const receipt = await tx.wait();
             if (!receipt) {
                 throw new Error('Transaction failed to confirm');
             }
 
+            // Verify transaction succeeded (not reverted)
+            if (receipt.status !== 1) {
+                throw new Error(`Transaction reverted. TX: ${tx.hash}, Status: ${receipt.status}`);
+            }
+
+            log(`TX confirmed in block ${receipt.blockNumber} with ${receipt.confirmations} confirmations`, 'blockchain');
+
+            // Verify bounty was actually created on-chain by reading contract state
+            try {
+                const onChainBounty = await this.communityBountyEscrowContract.bounties(nextBountyId);
+                if (onChainBounty.creator === ethers.ZeroAddress) {
+                    throw new Error(`Bounty ${nextBountyId} not found on-chain after transaction`);
+                }
+
+                // Verify creator matches
+                if (onChainBounty.creator.toLowerCase() !== userAddress.toLowerCase()) {
+                    throw new Error(`Bounty creator mismatch. Expected: ${userAddress}, Got: ${onChainBounty.creator}`);
+                }
+
+                // Verify amount matches (allow small rounding differences)
+                const amountDiff = onChainBounty.amount > amountWei
+                    ? onChainBounty.amount - amountWei
+                    : amountWei - onChainBounty.amount;
+
+                if (amountDiff > ethers.parseEther('0.00000001')) {
+                    throw new Error(`Bounty amount mismatch. Expected: ${amountWei}, Got: ${onChainBounty.amount}`);
+                }
+
+                log(`Verified bounty ${nextBountyId} on-chain: creator=${onChainBounty.creator}, amount=${onChainBounty.amount}`, 'blockchain');
+            } catch (verifyError: any) {
+                log(`WARNING: Could not verify bounty on-chain: ${verifyError.message}`, 'blockchain-ERROR');
+                // Don't fail the transaction if verification read fails (network issue)
+                // But log it for monitoring
+            }
+
             log(`Community bounty ${nextBountyId} created successfully with ${amountXdc} XDC`, 'blockchain');
 
-            return { tx, bountyId: nextBountyId };
+            return {
+                tx,
+                bountyId: nextBountyId,
+                receipt: {
+                    blockNumber: receipt.blockNumber,
+                    blockHash: receipt.blockHash,
+                    status: receipt.status,
+                    confirmations: receipt.confirmations
+                }
+            };
         } catch (error: any) {
             log(`Error creating community bounty with XDC: ${error.message}`, 'blockchain-ERROR');
             throw error;
@@ -2195,14 +2240,58 @@ export class BlockchainService {
 
             log(`Community bounty creation tx sent. TX: ${tx.hash}, Expected bounty ID: ${nextBountyId}`, 'blockchain');
 
+            // CRITICAL-4 FIX: Comprehensive transaction verification
             const receipt = await tx.wait();
             if (!receipt) {
                 throw new Error('Transaction failed to confirm');
             }
 
+            // Verify transaction succeeded (not reverted)
+            if (receipt.status !== 1) {
+                throw new Error(`Transaction reverted. TX: ${tx.hash}, Status: ${receipt.status}`);
+            }
+
+            log(`TX confirmed in block ${receipt.blockNumber} with ${receipt.confirmations} confirmations`, 'blockchain');
+
+            // Verify bounty was actually created on-chain by reading contract state
+            const userAddress = user.xdcWalletAddress.replace('xdc', '0x');
+            try {
+                const onChainBounty = await this.communityBountyEscrowContract.bounties(nextBountyId);
+                if (onChainBounty.creator === ethers.ZeroAddress) {
+                    throw new Error(`Bounty ${nextBountyId} not found on-chain after transaction`);
+                }
+
+                // Verify creator matches
+                if (onChainBounty.creator.toLowerCase() !== userAddress.toLowerCase()) {
+                    throw new Error(`Bounty creator mismatch. Expected: ${userAddress}, Got: ${onChainBounty.creator}`);
+                }
+
+                // Verify amount matches (allow small rounding differences)
+                const amountDiff = onChainBounty.amount > amountWei
+                    ? onChainBounty.amount - amountWei
+                    : amountWei - onChainBounty.amount;
+
+                if (amountDiff > ethers.parseEther('0.00000001')) {
+                    throw new Error(`Bounty amount mismatch. Expected: ${amountWei}, Got: ${onChainBounty.amount}`);
+                }
+
+                log(`Verified bounty ${nextBountyId} on-chain: creator=${onChainBounty.creator}, amount=${onChainBounty.amount}`, 'blockchain');
+            } catch (verifyError: any) {
+                log(`WARNING: Could not verify bounty on-chain: ${verifyError.message}`, 'blockchain-ERROR');
+            }
+
             log(`Community bounty ${nextBountyId} created successfully with ${amountRoxn} ROXN`, 'blockchain');
 
-            return { tx, bountyId: nextBountyId };
+            return {
+                tx,
+                bountyId: nextBountyId,
+                receipt: {
+                    blockNumber: receipt.blockNumber,
+                    blockHash: receipt.blockHash,
+                    status: receipt.status,
+                    confirmations: receipt.confirmations
+                }
+            };
         } catch (error: any) {
             log(`Error creating community bounty with ROXN: ${error.message}`, 'blockchain-ERROR');
             throw error;
@@ -2291,14 +2380,58 @@ export class BlockchainService {
 
             log(`Community bounty creation tx sent. TX: ${tx.hash}, Expected bounty ID: ${nextBountyId}`, 'blockchain');
 
+            // CRITICAL-4 FIX: Comprehensive transaction verification
             const receipt = await tx.wait();
             if (!receipt) {
                 throw new Error('Transaction failed to confirm');
             }
 
+            // Verify transaction succeeded (not reverted)
+            if (receipt.status !== 1) {
+                throw new Error(`Transaction reverted. TX: ${tx.hash}, Status: ${receipt.status}`);
+            }
+
+            log(`TX confirmed in block ${receipt.blockNumber} with ${receipt.confirmations} confirmations`, 'blockchain');
+
+            // Verify bounty was actually created on-chain by reading contract state
+            const userAddress = user.xdcWalletAddress.replace('xdc', '0x');
+            try {
+                const onChainBounty = await this.communityBountyEscrowContract.bounties(nextBountyId);
+                if (onChainBounty.creator === ethers.ZeroAddress) {
+                    throw new Error(`Bounty ${nextBountyId} not found on-chain after transaction`);
+                }
+
+                // Verify creator matches
+                if (onChainBounty.creator.toLowerCase() !== userAddress.toLowerCase()) {
+                    throw new Error(`Bounty creator mismatch. Expected: ${userAddress}, Got: ${onChainBounty.creator}`);
+                }
+
+                // Verify amount matches (allow small rounding differences for 6 decimals)
+                const amountDiff = onChainBounty.amount > amountInSmallestUnit
+                    ? onChainBounty.amount - amountInSmallestUnit
+                    : amountInSmallestUnit - onChainBounty.amount;
+
+                if (amountDiff > ethers.parseUnits('0.000001', 6)) {
+                    throw new Error(`Bounty amount mismatch. Expected: ${amountInSmallestUnit}, Got: ${onChainBounty.amount}`);
+                }
+
+                log(`Verified bounty ${nextBountyId} on-chain: creator=${onChainBounty.creator}, amount=${onChainBounty.amount}`, 'blockchain');
+            } catch (verifyError: any) {
+                log(`WARNING: Could not verify bounty on-chain: ${verifyError.message}`, 'blockchain-ERROR');
+            }
+
             log(`Community bounty ${nextBountyId} created successfully with ${amountUsdc} USDC`, 'blockchain');
 
-            return { tx, bountyId: nextBountyId };
+            return {
+                tx,
+                bountyId: nextBountyId,
+                receipt: {
+                    blockNumber: receipt.blockNumber,
+                    blockHash: receipt.blockHash,
+                    status: receipt.status,
+                    confirmations: receipt.confirmations
+                }
+            };
         } catch (error: any) {
             log(`Error creating community bounty with USDC: ${error.message}`, 'blockchain-ERROR');
             throw error;

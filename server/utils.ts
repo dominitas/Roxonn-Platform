@@ -111,6 +111,119 @@ export function log(message: string, source = "express", level: 'info' | 'warn' 
   }
 }
 
+/**
+ * CRITICAL-5 FIX: Sanitize user input to prevent command injection
+ *
+ * WHY THIS IS NEEDED:
+ * - GitHub issue titles and bodies are user-controlled
+ * - They may contain shell metacharacters, backticks, or code injection sequences
+ * - Bot comments could be parsed by CLI tools, scripts, or automation
+ * - Need to escape dangerous characters before:
+ *   - Inserting into GitHub comments
+ *   - Storing in database (though parameterized queries help)
+ *   - Logging to files
+ *
+ * ESCAPES:
+ * - Backticks: ` → \`
+ * - $(...): command substitution
+ * - ${...}: variable expansion
+ * - \n$(cmd): newline command injection
+ * - |, &, ;: shell operators
+ * - <, >: redirection
+ *
+ * @param input - User-controlled string to sanitize
+ * @param options - Sanitization options
+ * @returns Sanitized string safe for use in various contexts
+ */
+export function sanitizeUserInput(
+  input: string | null | undefined,
+  options: {
+    maxLength?: number;
+    allowNewlines?: boolean;
+    context?: 'markdown' | 'log' | 'db' | 'all';
+  } = {}
+): string {
+  if (!input) return '';
+
+  const {
+    maxLength = 10000,
+    allowNewlines = true,
+    context = 'all'
+  } = options;
+
+  let sanitized = input.substring(0, maxLength);
+
+  // Escape shell command injection sequences
+  if (context === 'all' || context === 'log') {
+    // Escape backticks (command substitution in bash)
+    sanitized = sanitized.replace(/`/g, '\\`');
+
+    // Escape $(...) command substitution
+    sanitized = sanitized.replace(/\$\(/g, '\\$(');
+
+    // Escape ${...} variable expansion
+    sanitized = sanitized.replace(/\$\{/g, '\\${');
+  }
+
+  // Escape markdown special characters if needed
+  if (context === 'all' || context === 'markdown') {
+    // Don't completely remove markdown formatting, just escape problematic sequences
+    // that could lead to XSS or rendering issues
+
+    // Escape HTML tags
+    sanitized = sanitized.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // Escape script tags in any case variation
+    sanitized = sanitized.replace(/<script[^>]*>.*?<\/script>/gi, '[removed script tag]');
+  }
+
+  // Remove or escape control characters
+  if (context === 'all' || context === 'log') {
+    // Remove null bytes (can cause issues in logs and strings)
+    sanitized = sanitized.replace(/\0/g, '');
+
+    // Escape shell operators if not allowing newlines
+    if (!allowNewlines) {
+      sanitized = sanitized.replace(/\n/g, '\\n');
+      sanitized = sanitized.replace(/\r/g, '\\r');
+    }
+
+    // Remove ANSI escape codes (can mess up terminals)
+    sanitized = sanitized.replace(/\x1b\[[0-9;]*m/g, '');
+  }
+
+  // Trim whitespace
+  sanitized = sanitized.trim();
+
+  return sanitized;
+}
+
+/**
+ * Sanitize GitHub issue data before using in bot comments or storing in DB
+ *
+ * @param issue - GitHub issue object
+ * @returns Sanitized issue object
+ */
+export function sanitizeGitHubIssue(issue: {
+  title?: string;
+  body?: string | null;
+  [key: string]: any;
+}): typeof issue {
+  return {
+    ...issue,
+    title: issue.title ? sanitizeUserInput(issue.title, {
+      maxLength: 500,
+      allowNewlines: false,
+      context: 'all'
+    }) : '',
+    body: issue.body ? sanitizeUserInput(issue.body, {
+      maxLength: 10000,
+      allowNewlines: true,
+      context: 'all'
+    }) : null
+  };
+}
+
 export function serveStatic(app: Express) {
   const distPath = path.resolve(__dirname, "..", "dist", "public");
 

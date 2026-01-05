@@ -30,7 +30,7 @@ import { Router, type Request, Response } from 'express';
 import { requireAuth, csrfProtection, requireClient, requireDeveloper } from '../auth';
 import { storage } from '../storage';
 import { blockchain } from '../blockchain';
-import { log } from '../utils';
+import { log, sanitizeUserInput } from '../utils';
 import rateLimit from 'express-rate-limit';
 import { ZodError } from 'zod';
 import { createCommunityBountySchema } from '../../shared/schema';
@@ -149,6 +149,21 @@ router.post(
         throw new BusinessError('Currency must be XDC, ROXN, or USDC', 400);
       }
 
+      // CRITICAL-5 FIX: Sanitize user-provided title and description
+      const sanitizedTitle = sanitizeUserInput(validatedData.title, {
+        maxLength: 500,
+        allowNewlines: false,
+        context: 'all'
+      });
+
+      const sanitizedDescription = validatedData.description
+        ? sanitizeUserInput(validatedData.description, {
+            maxLength: 5000,
+            allowNewlines: true,
+            context: 'all'
+          })
+        : undefined;
+
       // Create bounty in database
       // WHY STATUS pending_payment: User hasn't paid yet (set automatically by createCommunityBounty)
       const bounty = await storage.createCommunityBounty({
@@ -159,8 +174,8 @@ router.post(
         githubIssueUrl: validatedData.githubIssueUrl,
         creatorUserId: req.user.id,
         createdByGithubUsername: user.githubUsername || '',
-        title: validatedData.title,
-        description: validatedData.description,
+        title: sanitizedTitle,
+        description: sanitizedDescription,
         amount: validatedData.amount,
         currency: validatedData.currency,
         expiresAt: validatedData.expiresAt
@@ -291,14 +306,16 @@ router.post(
         throw new BusinessError('Unsupported currency', 400);
       }
 
-      // Update bounty status in DB
+      // Update bounty status in DB with comprehensive transaction data
       const updatedBounty = await storage.updateCommunityBounty(bountyId, {
         status: 'funded',
         paymentStatus: 'completed',
         paymentMethod: 'crypto',
         escrowTxHash: result.tx.hash,
         escrowDepositedAt: new Date(),
-        blockchainBountyId: result.bountyId
+        blockchainBountyId: result.bountyId,
+        // CRITICAL-4 FIX: Store blockchain confirmation data
+        escrowBlockNumber: (result.receipt as any)?.blockNumber || null,
       });
 
       log(`Community bounty ${bountyId} paid successfully. TX: ${result.tx.hash}, Blockchain ID: ${result.bountyId}`, 'community-bounties');

@@ -39,7 +39,8 @@ const app = express();
 const server = createServer(app);
 
 // Trust proxy - needed for X-Forwarded-For headers when behind Nginx
-app.set('trust proxy', true);
+// Use 1 to trust first proxy (nginx) - more secure than 'true'
+app.set('trust proxy', 1);
 
 // Add helmet middleware with CSP configuration
 app.use(helmet({
