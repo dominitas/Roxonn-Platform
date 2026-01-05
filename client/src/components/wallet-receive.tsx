@@ -400,12 +400,12 @@ export function WalletReceive() {
                         ) : (
                           <>
                             <ArrowDownUp className="h-4 w-4 mr-2" />
-                            Withdraw USDC on XDC to INR
+                            Withdraw USDC (Crypto → Fiat)
                           </>
                         )}
                       </Button>
                       <p className="text-sm text-gray-500 mt-1">
-                        Convert your USDC on XDC Network to Indian Rupees (INR) via Onramp.money
+                        Withdraw USDC to any fiat currency (EUR, USD, GBP, INR, and 50+ more) via Onramp.money
                       </p>
                       {sellError && (
                         <p className="text-sm text-red-500 mt-1">{sellError}</p>

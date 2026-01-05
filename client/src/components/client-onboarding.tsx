@@ -5,7 +5,6 @@ import { useOnboarding } from '@/hooks/use-onboarding';
 import { useAuth } from '@/hooks/use-auth';
 import {
   Coins,
-  Chrome,
   Github,
   ExternalLink,
   CheckCircle2,
@@ -16,7 +15,8 @@ import {
   DollarSign,
   FileCode,
   HelpCircle,
-  MessageSquare
+  MessageSquare,
+  Wallet
 } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 
@@ -35,9 +35,10 @@ interface OnboardingStep {
 const ONBOARDING_STEPS: OnboardingStep[] = [
   { id: 1, title: 'Welcome', description: 'Learn what you can do as a client' },
   { id: 2, title: 'How It Works', description: 'Understand the bounty lifecycle' },
-  { id: 3, title: 'Install Extension', description: 'Get the browser extension' },
-  { id: 4, title: 'Try It Out', description: 'Create your first bounty' },
-  { id: 5, title: 'Complete', description: 'You\'re ready to go!' },
+  { id: 3, title: 'Add Funds', description: 'Buy USDC to fund bounties' },
+  { id: 4, title: 'GitHub App', description: 'Install the GitHub App' },
+  { id: 5, title: 'Try It Out', description: 'Create your first bounty' },
+  { id: 6, title: 'Complete', description: 'You\'re ready to go!' },
 ];
 
 export function ClientOnboarding() {
@@ -49,36 +50,6 @@ export function ClientOnboarding() {
 
   // Only show for pool managers (clients)
   const isClient = user?.role === "poolmanager";
-
-  // Detect browser type
-  const [browserType, setBrowserType] = useState<'chrome' | 'firefox' | 'edge' | 'other'>('chrome');
-
-  useEffect(() => {
-    const userAgent = navigator.userAgent;
-    if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) {
-      setBrowserType('chrome');
-    } else if (userAgent.includes('Firefox')) {
-      setBrowserType('firefox');
-    } else if (userAgent.includes('Edg')) {
-      setBrowserType('edge');
-    } else {
-      setBrowserType('other');
-    }
-  }, []);
-
-  const extensionLinks = {
-    chrome: 'https://chrome.google.com/webstore/detail/roxonn/[ID]',
-    firefox: 'https://addons.mozilla.org/firefox/addon/roxonn/',
-    edge: 'https://microsoftedge.microsoft.com/addons/detail/roxonn/[ID]',
-    other: 'https://roxonn.com/extension'
-  };
-
-  const browserNames = {
-    chrome: 'Chrome',
-    firefox: 'Firefox',
-    edge: 'Edge',
-    other: 'your browser'
-  };
 
   const handleClose = () => {
     setIsOpen(false);
@@ -192,7 +163,7 @@ export function ClientOnboarding() {
               </div>
 
               <p className="text-center text-muted-foreground mt-6">
-                Let's get you started in 4 quick steps!
+                Let's get you started in 5 quick steps!
               </p>
             </div>
 
@@ -236,8 +207,8 @@ export function ClientOnboarding() {
                     2
                   </div>
                   <div>
-                    <h4 className="font-semibold">Click "Create Roxonn Bounty" button</h4>
-                    <p className="text-sm text-muted-foreground">Set amount (XDC/ROXN/USDC) and details</p>
+                    <h4 className="font-semibold">Comment to create a bounty</h4>
+                    <p className="text-sm text-muted-foreground">Use <code className="bg-muted px-2 py-0.5 rounded">/bounty 100 USDC</code> on any issue</p>
                   </div>
                 </div>
 
@@ -246,8 +217,8 @@ export function ClientOnboarding() {
                     3
                   </div>
                   <div>
-                    <h4 className="font-semibold">Pay to escrow</h4>
-                    <p className="text-sm text-muted-foreground">Crypto wallet or credit card via Onramp</p>
+                    <h4 className="font-semibold">Funds held in escrow</h4>
+                    <p className="text-sm text-muted-foreground">USDC from your wallet is securely locked until work is done</p>
                   </div>
                 </div>
 
@@ -285,24 +256,125 @@ export function ClientOnboarding() {
           </>
         )}
 
-        {/* Step 3: Install Extension */}
+        {/* Step 3: Add Funds */}
         {currentStep === 3 && (
           <>
             <DialogHeader>
               <div className="flex justify-center mb-4">
                 <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
-                  <Chrome className="h-8 w-8 text-primary" />
+                  <Wallet className="h-8 w-8 text-primary" />
                 </div>
               </div>
-              <DialogTitle className="text-2xl text-center">Install Browser Extension</DialogTitle>
+              <DialogTitle className="text-2xl text-center">Add Funds to Your Wallet</DialogTitle>
               <DialogDescription className="text-center">
-                Create bounties easily with our {browserNames[browserType]} extension
+                Buy USDC to start funding bounties
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="py-6 space-y-6">
+              <div className="bg-blue-50 dark:bg-blue-950/50 p-6 rounded-lg border border-blue-200 dark:border-blue-800">
+                <h3 className="font-semibold mb-4 text-blue-800 dark:text-blue-300">How to Add USDC:</h3>
+
+                <div className="space-y-4">
+                  <div className="flex items-start gap-4">
+                    <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold flex-shrink-0">
+                      1
+                    </div>
+                    <div>
+                      <h4 className="font-semibold">Go to your Wallet page</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Click "Wallet" in the navigation menu or <a href="/wallet" className="text-primary underline">click here</a>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-4">
+                    <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold flex-shrink-0">
+                      2
+                    </div>
+                    <div>
+                      <h4 className="font-semibold">Click "Buy USDC"</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Opens secure payment window via Onramp.money
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-4">
+                    <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold flex-shrink-0">
+                      3
+                    </div>
+                    <div>
+                      <h4 className="font-semibold">Pay with card or bank transfer</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Supports EUR, USD, GBP, INR, and 50+ other currencies
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-4">
+                    <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold flex-shrink-0">
+                      4
+                    </div>
+                    <div>
+                      <h4 className="font-semibold flex items-center gap-2">
+                        Receive USDC in your Roxonn wallet
+                        <Zap className="h-4 w-4 text-yellow-500" />
+                      </h4>
+                      <p className="text-sm text-muted-foreground">
+                        Usually instant - you'll see the balance update within seconds
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-green-50 dark:bg-green-950/50 p-4 rounded-lg border border-green-200 dark:border-green-800">
+                <p className="text-sm">
+                  <span className="font-semibold text-green-800 dark:text-green-300">Why USDC?</span><br />
+                  <span className="text-muted-foreground">
+                    USDC is a stablecoin pegged to the US Dollar (1 USDC = $1). It's the easiest way to fund bounties without crypto price volatility. You can also use XDC or ROXN tokens.
+                  </span>
+                </p>
+              </div>
+
+              <div className="bg-yellow-50 dark:bg-yellow-950/50 p-4 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                <p className="text-sm">
+                  <span className="font-semibold">Already have USDC on XDC Network?</span><br />
+                  You can also send USDC directly to your Roxonn wallet address from any XDC-compatible wallet.
+                </p>
+              </div>
+            </div>
+
+            <DialogFooter className="flex justify-between sm:justify-between">
+              <Button variant="outline" onClick={handleBack}>
+                <ArrowLeft className="mr-2 h-4 w-4" /> Back
+              </Button>
+              <Button onClick={handleNext}>
+                Got It! <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+
+        {/* Step 4: Install GitHub App */}
+        {currentStep === 4 && (
+          <>
+            <DialogHeader>
+              <div className="flex justify-center mb-4">
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Github className="h-8 w-8 text-primary" />
+                </div>
+              </div>
+              <DialogTitle className="text-2xl text-center">Install Roxonn GitHub App</DialogTitle>
+              <DialogDescription className="text-center">
+                Enable bounty creation on your repositories
               </DialogDescription>
             </DialogHeader>
 
             <div className="py-6">
               <div className="bg-white dark:bg-gray-900 border-2 border-purple-200 dark:border-purple-800 rounded-lg p-6 mb-6">
-                <h3 className="font-semibold mb-4 text-lg">Step-by-Step Installation:</h3>
+                <h3 className="font-semibold mb-4 text-lg">Installation Steps:</h3>
 
                 <div className="space-y-6">
                   <div className="flex items-start gap-4">
@@ -310,16 +382,16 @@ export function ClientOnboarding() {
                       1
                     </div>
                     <div className="flex-1">
-                      <h4 className="font-semibold mb-2">Click "Install Extension"</h4>
-                      <p className="text-sm text-muted-foreground mb-3">This will open the {browserNames[browserType]} Web Store</p>
+                      <h4 className="font-semibold mb-2">Click "Install GitHub App"</h4>
+                      <p className="text-sm text-muted-foreground mb-3">Opens GitHub's app installation page</p>
                       <a
-                        href={extensionLinks[browserType]}
+                        href="https://github.com/apps/roxonn-contribution-rewards/installations/new"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium"
                       >
-                        <Chrome className="h-4 w-4" />
-                        Install Extension for {browserNames[browserType]}
+                        <Github className="h-4 w-4" />
+                        Install Roxonn Contribution Rewards App
                         <ExternalLink className="h-3 w-3" />
                       </a>
                     </div>
@@ -330,8 +402,10 @@ export function ClientOnboarding() {
                       2
                     </div>
                     <div className="flex-1">
-                      <h4 className="font-semibold mb-2">Click "Add to {browserNames[browserType]}"</h4>
-                      <p className="text-sm text-muted-foreground">Accept the permissions to allow posting comments</p>
+                      <h4 className="font-semibold mb-2">Select repositories</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Choose which repositories can have Roxonn bounties (you can select all or specific repos)
+                      </p>
                     </div>
                   </div>
 
@@ -340,17 +414,33 @@ export function ClientOnboarding() {
                       3
                     </div>
                     <div className="flex-1">
-                      <h4 className="font-semibold mb-2">Pin to toolbar (recommended)</h4>
-                      <p className="text-sm text-muted-foreground">Click the puzzle icon → Pin Roxonn extension for easy access</p>
+                      <h4 className="font-semibold mb-2">Authorize the app</h4>
+                      <p className="text-sm text-muted-foreground">
+                        Grant permissions - the app needs to post comments and read issues
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-4">
+                    <div className="w-8 h-8 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold flex-shrink-0">
+                      4
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-semibold mb-2">Return to Roxonn</h4>
+                      <p className="text-sm text-muted-foreground">
+                        You'll be redirected back - your repos will now support bounties!
+                      </p>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-yellow-50 dark:bg-yellow-950/50 p-4 rounded-lg border border-yellow-200 dark:border-yellow-800">
+              <div className="bg-blue-50 dark:bg-blue-950/50 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
                 <p className="text-sm">
-                  <span className="font-semibold">Don't want to install the extension?</span><br />
-                  No problem! You can create bounties manually by commenting <code className="bg-white dark:bg-gray-800 px-2 py-1 rounded">/bounty 100 USDC</code> on any GitHub issue.
+                  <span className="font-semibold text-blue-800 dark:text-blue-300">What can you do after installing?</span><br />
+                  <span className="text-muted-foreground">
+                    Comment <code className="bg-white dark:bg-gray-800 px-2 py-1 rounded">/bounty 100 USDC</code> on any issue in your repos. The Roxonn bot will automatically create and track the bounty!
+                  </span>
                 </p>
               </div>
             </div>
@@ -371,8 +461,8 @@ export function ClientOnboarding() {
           </>
         )}
 
-        {/* Step 4: Try It Out */}
-        {currentStep === 4 && (
+        {/* Step 5: Try It Out */}
+        {currentStep === 5 && (
           <>
             <DialogHeader>
               <div className="flex justify-center mb-4">
@@ -382,7 +472,7 @@ export function ClientOnboarding() {
               </div>
               <DialogTitle className="text-2xl text-center">Try Creating Your First Bounty</DialogTitle>
               <DialogDescription className="text-center">
-                Let's test the extension!
+                Let's create a bounty using the GitHub command!
               </DialogDescription>
             </DialogHeader>
 
@@ -394,25 +484,24 @@ export function ClientOnboarding() {
                     <div>
                       <span className="font-semibold">Go to any GitHub issue in your repository</span>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Or use our{' '}
-                        <a href="https://github.com/roxonn/demo-repo/issues" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
-                          demo repository
-                        </a>
+                        Make sure the Roxonn GitHub App is installed on that repo
                       </p>
                     </div>
                   </li>
                   <li className="flex items-start gap-3">
                     <span className="w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold flex-shrink-0 text-sm">2</span>
                     <div>
-                      <span className="font-semibold">Click the purple "Create Roxonn Bounty" button</span>
-                      <p className="text-sm text-muted-foreground mt-1">You'll see it in the top-right of the issue page</p>
+                      <span className="font-semibold">Comment on the issue:</span>
+                      <p className="mt-2">
+                        <code className="bg-white dark:bg-gray-800 px-3 py-2 rounded text-sm block">/bounty 10 USDC</code>
+                      </p>
                     </div>
                   </li>
                   <li className="flex items-start gap-3">
                     <span className="w-6 h-6 rounded-full bg-blue-500 text-white flex items-center justify-center font-bold flex-shrink-0 text-sm">3</span>
                     <div>
-                      <span className="font-semibold">Fill in the form and submit</span>
-                      <p className="text-sm text-muted-foreground mt-1">Try a small test amount like 10 USDC</p>
+                      <span className="font-semibold">Watch the Roxonn bot respond!</span>
+                      <p className="text-sm text-muted-foreground mt-1">It will post a comment confirming the bounty is active</p>
                     </div>
                   </li>
                 </ol>
@@ -424,10 +513,10 @@ export function ClientOnboarding() {
                   Having trouble?
                 </h4>
                 <ul className="text-sm space-y-1 text-muted-foreground">
-                  <li>• Make sure the extension is installed and enabled</li>
-                  <li>• Refresh the GitHub page</li>
-                  <li>• Check that you're on an <strong>issue</strong> page (not PR)</li>
-                  <li>• <a href="https://roxonn.com/docs/troubleshooting" target="_blank" className="text-blue-600 underline">View troubleshooting guide</a></li>
+                  <li>• Make sure the GitHub App is installed on your repository</li>
+                  <li>• Check that you have USDC in your wallet</li>
+                  <li>• Ensure you're commenting on an <strong>issue</strong> (not a PR)</li>
+                  <li>• <a href="https://discord.gg/roxonn" target="_blank" className="text-blue-600 underline">Get help on Discord</a></li>
                 </ul>
               </div>
             </div>
@@ -443,8 +532,8 @@ export function ClientOnboarding() {
           </>
         )}
 
-        {/* Step 5: Complete */}
-        {currentStep === 5 && (
+        {/* Step 6: Complete */}
+        {currentStep === 6 && (
           <>
             <DialogHeader>
               <div className="flex justify-center mb-4">
@@ -461,25 +550,23 @@ export function ClientOnboarding() {
             <div className="py-6">
               <div className="grid grid-cols-3 gap-4 mb-6">
                 <a
-                  href="https://roxonn.com/docs"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href="/wallet"
                   className="bg-purple-50 dark:bg-purple-950/50 p-4 rounded-lg text-center hover:bg-purple-100 dark:hover:bg-purple-900/50 transition-colors"
                 >
-                  <FileCode className="h-8 w-8 mx-auto mb-2 text-purple-600" />
-                  <h4 className="font-semibold text-sm mb-1">Documentation</h4>
-                  <span className="text-xs text-purple-600">Read the docs</span>
+                  <Wallet className="h-8 w-8 mx-auto mb-2 text-purple-600" />
+                  <h4 className="font-semibold text-sm mb-1">Add Funds</h4>
+                  <span className="text-xs text-purple-600">Buy USDC</span>
                 </a>
 
                 <a
-                  href="https://roxonn.com/tutorials"
+                  href="https://github.com/apps/roxonn-contribution-rewards/installations/new"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="bg-purple-50 dark:bg-purple-950/50 p-4 rounded-lg text-center hover:bg-purple-100 dark:hover:bg-purple-900/50 transition-colors"
                 >
-                  <Users className="h-8 w-8 mx-auto mb-2 text-purple-600" />
-                  <h4 className="font-semibold text-sm mb-1">Video Tutorials</h4>
-                  <span className="text-xs text-purple-600">Watch videos</span>
+                  <Github className="h-8 w-8 mx-auto mb-2 text-purple-600" />
+                  <h4 className="font-semibold text-sm mb-1">GitHub App</h4>
+                  <span className="text-xs text-purple-600">Install/Manage</span>
                 </a>
 
                 <a
@@ -497,9 +584,9 @@ export function ClientOnboarding() {
               <div className="bg-blue-50 dark:bg-blue-950/50 p-6 rounded-lg border border-blue-200 dark:border-blue-800 mb-6">
                 <h4 className="font-semibold mb-3">Quick Reference:</h4>
                 <div className="text-sm space-y-2">
-                  <p>• <strong>Create bounty:</strong> Click extension button OR comment <code className="bg-white dark:bg-gray-800 px-2 py-1 rounded">/bounty 100 USDC</code></p>
+                  <p>• <strong>Create bounty:</strong> Comment <code className="bg-white dark:bg-gray-800 px-2 py-1 rounded">/bounty 100 USDC</code> on any issue</p>
                   <p>• <strong>Check status:</strong> Comment <code className="bg-white dark:bg-gray-800 px-2 py-1 rounded">@roxonn status</code></p>
-                  <p>• <strong>Browse bounties:</strong> <a href="https://roxonn.com/explore" className="text-blue-600 underline">roxonn.com/explore</a></p>
+                  <p>• <strong>Supported currencies:</strong> USDC, XDC, ROXN</p>
                 </div>
               </div>
 

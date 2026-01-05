@@ -216,7 +216,7 @@ export function DeveloperOnboarding() {
                       <Search className="h-4 w-4" /> Find a bounty
                     </h4>
                     <p className="text-sm text-muted-foreground">
-                      Browse <a href="/explore" className="text-primary underline">active bounties</a> or look for the Roxonn bot comment on GitHub issues
+                      Browse <a href="/explore" className="text-primary underline">active bounties</a> or look for issues with the Roxonn bot comment (created by pool managers via our GitHub App)
                     </p>
                   </div>
                 </div>
@@ -422,6 +422,15 @@ export function DeveloperOnboarding() {
                     Create a bounty (e.g., <code className="bg-muted px-1 rounded">/bounty 100 USDC</code>). Anyone can fund a bounty!
                   </p>
                 </div>
+              </div>
+
+              <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-950/50 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                <h4 className="font-semibold text-sm mb-2">How do bounties appear on GitHub?</h4>
+                <p className="text-sm text-muted-foreground">
+                  Pool managers install the <strong>Roxonn Contribution Rewards GitHub App</strong> on their repositories.
+                  When they comment <code className="bg-white dark:bg-gray-800 px-1 rounded">/bounty 100 USDC</code> on an issue,
+                  the Roxonn bot automatically posts a comment with bounty details and tracks attempts/payments.
+                </p>
               </div>
 
               <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-950/50 rounded-lg border border-blue-200 dark:border-blue-800">
